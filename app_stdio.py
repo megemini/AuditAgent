@@ -1,47 +1,43 @@
 """
+智能助手系统 - stdio版本
+使用stdio协议连接MCP服务器
 pip install fastmcp gradio openai python-dotenv
 """
 
 # ==================== API 配置 ====================
-# 请在此处配置您的 API 信息
-# API_KEY = "292a9a1fd77e793cc795e91c02a18dd52b93ab5b"  # 您的 API 密钥
-# BASE_URL = "https://aistudio.baidu.com/llm/lmapi/v3"    # API 基础 URL
-# MODEL_NAME = "ernie-4.5-turbo-128k-preview"             # 使用的模型名称
-
-
 API_KEY = "ms-b51aa344-4aca-4c29-814b-316e14fe1920"  # 您的 API 密钥
 BASE_URL = "https://api-inference.modelscope.cn/v1"    # API 基础 URL
 MODEL_NAME = "Qwen/Qwen3-235B-A22B"             # 使用的模型名称
 
 # ==================== MCP 服务器配置 ====================
-# 城市分级查询服务器配置
-CITY_SERVER_URL = "http://0.0.0.0:8080/sse"
+# 城市分级查询服务器配置 (stdio)
+CITY_SERVER_COMMAND = ["python", "mcp_citytier_stdio.py"]
 
-# 发票OCR识别系统服务器配置
-INVOICE_OCR_SERVER_URL = "http://0.0.0.0:8081/sse"
-
-# 文件上传MCP服务器配置（用于解决跨服务器文件访问问题）
-FILE_UPLOAD_SERVER_URL = "gradio upload-mcp http://localhost:7860/ ./upload_files"
-
+# 发票OCR识别系统服务器配置 (stdio)
+INVOICE_OCR_SERVER_COMMAND = ["python", "mcp_invoice_stdio.py"]
 
 # ==================== 导入模块 ====================
 import asyncio
 import json
 import os
 import logging
+import subprocess
 from contextlib import AsyncExitStack
 from typing import Any, Dict, List, Union
 import threading
 import http.server
 import socketserver
-from urllib.parse import urlparse
+import base64
+import uuid
+import shutil
 
 import gradio as gr
 from gradio.components.chatbot import ChatMessage
 from openai import AsyncOpenAI
 from dotenv import load_dotenv
 
-from fastmcp.client import Client     # 或 SSEClient/StdioClient
+from fastmcp.client import Client
+from fastmcp.client.transports import PythonStdioTransport
 
 load_dotenv()
 
@@ -51,7 +47,7 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
         logging.StreamHandler(),
-        logging.FileHandler('ai_interaction.log', encoding='utf-8')
+        logging.FileHandler('ai_interaction_stdio.log', encoding='utf-8')
     ]
 )
 logger = logging.getLogger(__name__)
@@ -60,22 +56,22 @@ loop = asyncio.new_event_loop()
 asyncio.set_event_loop(loop)
 
 
-def start_file_server(port=8888):
+def start_file_server(port=8889):
     """启动一个简单的HTTP文件服务器来提供上传文件的访问"""
     import threading
     import http.server
     import socketserver
-
+    
     class FileHandler(http.server.SimpleHTTPRequestHandler):
         def __init__(self, *args, **kwargs):
             super().__init__(*args, directory=os.path.join(os.getcwd(), "upload_files"), **kwargs)
-
+        
         def end_headers(self):
             self.send_header('Access-Control-Allow-Origin', '*')
             self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
             self.send_header('Access-Control-Allow-Headers', '*')
             super().end_headers()
-
+    
     def run_server():
         try:
             with socketserver.TCPServer(("", port), FileHandler) as httpd:
@@ -83,13 +79,13 @@ def start_file_server(port=8888):
                 httpd.serve_forever()
         except Exception as e:
             logger.error(f"文件服务器启动失败: {e}")
-
+    
     server_thread = threading.Thread(target=run_server, daemon=True)
     server_thread.start()
     return f"http://localhost:{port}"
 
 
-class FastMCPClientWrapper:
+class FastMCPStdioClientWrapper:
     def __init__(self):
         self.sessions: Dict[str, Client] = {}  # 存储多个服务器连接
         self.exit_stacks: Dict[str, AsyncExitStack] = {}  # 存储多个服务器的exit_stack
@@ -101,11 +97,11 @@ class FastMCPClientWrapper:
         self.connected_servers: List[str] = []  # 已连接的服务器列表
 
     # ------------------------- 连接 -------------------------
-    def connect(self, server_url: str, server_name: str) -> str:
+    def connect(self, server_command: List[str], server_name: str) -> str:
         """同步封装，方便 Gradio 直接调用"""
-        return loop.run_until_complete(self._connect(server_url, server_name))
+        return loop.run_until_complete(self._connect(server_command, server_name))
 
-    async def _connect(self, server_url: str, server_name: str) -> str:
+    async def _connect(self, server_command: List[str], server_name: str) -> str:
         # 关闭该服务器的旧连接
         if server_name in self.exit_stacks:
             await self.exit_stacks[server_name].aclose()
@@ -113,10 +109,19 @@ class FastMCPClientWrapper:
         self.exit_stacks[server_name] = AsyncExitStack()
 
         try:
-            # ✅ 关键：fastmcp 的 Client 直接支持 SSE
-            self.sessions[server_name] = await self.exit_stacks[server_name].enter_async_context(
-                Client(server_url)   # 如果是本地 stdio，可换成 StdioClient(...)
-            )
+            # ✅ 关键：使用 PythonStdioTransport 创建 Client
+            # 假设 server_command 是 ["python", "script.py"] 格式
+            if len(server_command) >= 2 and server_command[0] == "python":
+                script_path = server_command[1]
+                transport = PythonStdioTransport(script_path)
+            else:
+                # 如果不是标准的 python 命令，使用通用的方式
+                from fastmcp.client.transports import StdioTransport
+                transport = StdioTransport(command=server_command[0], args=server_command[1:])
+
+            # 创建 Client 并进入上下文
+            client = Client(transport)
+            self.sessions[server_name] = await self.exit_stacks[server_name].enter_async_context(client)
 
             # 拉取工具
             tools_resp = await self.sessions[server_name].list_tools()
@@ -156,7 +161,7 @@ class FastMCPClientWrapper:
             if server_name in self.connected_servers:
                 self.connected_servers.remove(server_name)
             
-            logger.error(f"Failed to connect to {server_name} at {server_url}: {str(e)}")
+            logger.error(f"Failed to connect to {server_name} with command {server_command}: {str(e)}")
             return f"❌ Failed to connect to {server_name}: {str(e)}"
     
     def get_all_tools(self) -> List[Dict[str, Any]]:
@@ -176,29 +181,38 @@ class FastMCPClientWrapper:
                         return server_name
         return None
     
-    def test_connection(self, server_url: str, server_name: str) -> str:
+    def test_connection(self, server_command: List[str], server_name: str) -> str:
         """测试服务器连接"""
-        return loop.run_until_complete(self._test_connection(server_url, server_name))
+        return loop.run_until_complete(self._test_connection(server_command, server_name))
     
-    async def _test_connection(self, server_url: str, server_name: str) -> str:
+    async def _test_connection(self, server_command: List[str], server_name: str) -> str:
         """测试服务器连接的异步实现"""
         try:
             # 尝试创建临时连接进行测试
             temp_exit_stack = AsyncExitStack()
-            temp_session = await temp_exit_stack.enter_async_context(
-                Client(server_url)
-            )
-            
+
+            # 创建传输层
+            if len(server_command) >= 2 and server_command[0] == "python":
+                script_path = server_command[1]
+                transport = PythonStdioTransport(script_path)
+            else:
+                from fastmcp.client.transports import StdioTransport
+                transport = StdioTransport(command=server_command[0], args=server_command[1:])
+
+            # 创建临时客户端
+            temp_client = Client(transport)
+            temp_session = await temp_exit_stack.enter_async_context(temp_client)
+
             # 尝试获取工具列表来验证连接
-            tools_resp = await temp_session.list_tools()
-            
+            await temp_session.list_tools()
+
             # 清理临时连接
             await temp_exit_stack.aclose()
-            
+
             return f"✅ Connection test successful for {server_name}. Server is responding."
             
         except Exception as e:
-            logger.error(f"Connection test failed for {server_name} at {server_url}: {str(e)}")
+            logger.error(f"Connection test failed for {server_name} with command {server_command}: {str(e)}")
             return f"❌ Connection test failed for {server_name}: {str(e)}"
 
     # ------------------------- 对话 -------------------------
@@ -222,7 +236,7 @@ class FastMCPClientWrapper:
             role, content = (m.role, m.content) if isinstance(m, ChatMessage) else (m["role"], m["content"])
             if role in {"user", "assistant", "system"}:
                 openai_msgs.append({"role": role, "content": content})
-        
+
         # 如果有图片文件，处理图片内容
         if image_file:
             message_content = []
@@ -231,8 +245,6 @@ class FastMCPClientWrapper:
             if hasattr(image_file, 'name'):
                 try:
                     # 生成唯一的文件名
-                    import uuid
-                    import base64
                     unique_filename = f"{uuid.uuid4()}_{os.path.basename(image_file.name)}"
 
                     # 确保 upload_files 目录存在
@@ -243,7 +255,6 @@ class FastMCPClientWrapper:
                     saved_file_path = os.path.join(upload_dir, unique_filename)
 
                     # 复制上传的文件到 upload_files 目录
-                    import shutil
                     shutil.copy2(image_file.name, saved_file_path)
 
                     # 读取图片文件并转换为base64
@@ -266,10 +277,10 @@ class FastMCPClientWrapper:
                     data_url = f"data:{mime_type};base64,{img_base64}"
 
                     # 生成可被OCR服务器访问的URL（使用独立的文件服务器）
-                    file_server_url = f"http://localhost:8888/{unique_filename}"
+                    file_server_url = f"http://localhost:8889/{unique_filename}"
 
                     # 同时生成本地URL作为备用
-                    local_image_url = f"http://localhost:7860/upload_files/{unique_filename}"
+                    local_image_url = f"http://localhost:7861/upload_files/{unique_filename}"
 
                     message_content.append({
                         "type": "text",
@@ -294,7 +305,7 @@ class FastMCPClientWrapper:
         logger.info("=== 首次调用 LLM ===")
         logger.info(f"发送给 OpenAI 的消息: {json.dumps(openai_msgs, ensure_ascii=False, indent=2)}")
         logger.info(f"发送的工具: {json.dumps(self.get_all_tools(), ensure_ascii=False, indent=2) if self.get_all_tools() else '无'}")
-        
+
         resp = await self.openai_client.chat.completions.create(
             model=MODEL_NAME,
             messages=openai_msgs,
@@ -304,14 +315,14 @@ class FastMCPClientWrapper:
                 "enable_thinking": False
             }
         )
-        
+
         # 记录 OpenAI 响应
         response_data = {
             'id': resp.id,
             'model': resp.model,
             'choices': []
         }
-        
+
         for choice in resp.choices:
             choice_data = {
                 'index': choice.index,
@@ -322,7 +333,7 @@ class FastMCPClientWrapper:
                 },
                 'finish_reason': choice.finish_reason
             }
-            
+
             if choice.message.tool_calls:
                 for tc in choice.message.tool_calls:
                     tool_call_data = {
@@ -334,10 +345,8 @@ class FastMCPClientWrapper:
                         }
                     }
                     choice_data['message']['tool_calls'].append(tool_call_data)
-            
+
             response_data['choices'].append(choice_data)
-        
-        # logger.info('------------', resp)
 
         logger.info(f"OpenAI 响应: {json.dumps(response_data, ensure_ascii=False, indent=2)}")
 
@@ -362,7 +371,7 @@ class FastMCPClientWrapper:
                 results.append(
                     {
                         "role": "assistant",
-                        "content": f"``json\n{json.dumps(args, ensure_ascii=False, indent=2)}\n```",
+                        "content": f"```json\n{json.dumps(args, ensure_ascii=False, indent=2)}\n```",
                         "metadata": {"title": "Parameters"},
                     }
                 )
@@ -381,19 +390,18 @@ class FastMCPClientWrapper:
                         logger.info(f"处理图片URL: {image_url}")
 
                         # 如果是本地URL，尝试转换为可访问的URL
-                        if image_url.startswith("http://localhost:7860/upload_files/"):
+                        if image_url.startswith("http://localhost:7861/upload_files/"):
                             filename = image_url.split("/")[-1]
                             local_file_path = os.path.join(os.getcwd(), "upload_files", filename)
 
                             if os.path.exists(local_file_path):
                                 # 使用文件服务器URL，确保OCR服务器能访问
-                                file_server_url = f"http://localhost:8888/{filename}"
+                                file_server_url = f"http://localhost:8889/{filename}"
                                 args["image_url"] = file_server_url
                                 logger.info(f"更新图片URL为文件服务器URL: {file_server_url}")
 
                                 # 同时提供base64数据作为备用（OCR工具支持此参数）
                                 try:
-                                    import base64
                                     with open(local_file_path, "rb") as img_file:
                                         img_data = img_file.read()
                                         img_base64 = base64.b64encode(img_data).decode('utf-8')
@@ -403,7 +411,7 @@ class FastMCPClientWrapper:
                                     logger.warning(f"无法生成base64数据: {e}")
                             else:
                                 logger.error(f"本地文件不存在: {local_file_path}")
-                        elif image_url.startswith("http://localhost:8888/"):
+                        elif image_url.startswith("http://localhost:8889/"):
                             # 已经是文件服务器URL，无需转换
                             logger.info(f"使用文件服务器URL: {image_url}")
 
@@ -427,7 +435,7 @@ class FastMCPClientWrapper:
                         'is_error': True
                     })()
                 results[-2]["metadata"]["status"] = "done"
-                
+
                 # 记录工具结果
                 # 处理 FastMCP 工具返回的结果（可能是字典或对象）
                 if hasattr(tool_result, 'content'):
@@ -442,7 +450,7 @@ class FastMCPClientWrapper:
                     # 其他格式
                     tool_result_content = str(tool_result)
                     tool_result_is_error = False
-                    
+
                 tool_result_data = {
                     'content': tool_result_content,
                     'isError': tool_result_is_error
@@ -491,7 +499,7 @@ class FastMCPClientWrapper:
                 # 二次调用
                 logger.info("=== 二次调用 LLM ===")
                 logger.info(f"发送给 OpenAI 的消息: {json.dumps(openai_msgs, ensure_ascii=False, indent=2)}")
-                
+
                 follow_resp = await self.openai_client.chat.completions.create(
                     model=MODEL_NAME,
                     messages=openai_msgs,
@@ -500,14 +508,14 @@ class FastMCPClientWrapper:
                         "enable_thinking": False
                     }
                 )
-                
+
                 # 记录 OpenAI 二次响应
                 follow_response_data = {
                     'id': follow_resp.id,
                     'model': follow_resp.model,
                     'choices': []
                 }
-                
+
                 for choice in follow_resp.choices:
                     choice_data = {
                         'index': choice.index,
@@ -518,7 +526,7 @@ class FastMCPClientWrapper:
                         },
                         'finish_reason': choice.finish_reason
                     }
-                    
+
                     if choice.message.tool_calls:
                         for tc in choice.message.tool_calls:
                             tool_call_data = {
@@ -530,11 +538,11 @@ class FastMCPClientWrapper:
                                 }
                             }
                             choice_data['message']['tool_calls'].append(tool_call_data)
-                    
+
                     follow_response_data['choices'].append(choice_data)
-                
+
                 logger.info(f"OpenAI 二次响应: {json.dumps(follow_response_data, ensure_ascii=False, indent=2)}")
-                
+
                 if follow_resp.choices[0].message.content:
                     results.append(
                         {"role": "assistant", "content": follow_resp.choices[0].message.content}
@@ -544,7 +552,7 @@ class FastMCPClientWrapper:
 
 
 # ------------------------- Gradio UI -------------------------
-client = FastMCPClientWrapper()
+client = FastMCPStdioClientWrapper()
 
 
 def gradio_app():
@@ -559,7 +567,7 @@ def gradio_app():
         margin-bottom: 20px;
         box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
     }
-    
+
     .tab-header {
         background: #f8f9fa;
         border-radius: 8px;
@@ -567,7 +575,7 @@ def gradio_app():
         margin-bottom: 15px;
         border-left: 4px solid #667eea;
     }
-    
+
     .status-bar {
         background: #f1f3f4;
         border-radius: 20px;
@@ -576,7 +584,7 @@ def gradio_app():
         font-size: 12px;
         border: 1px solid #e0e0e0;
     }
-    
+
     .config-section {
         background: #ffffff;
         border-radius: 10px;
@@ -585,91 +593,16 @@ def gradio_app():
         box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
         border: 1px solid #e8eaed;
     }
-    
-    .upload-section {
-        background: #f8f9fa;
-        border-radius: 10px;
-        padding: 20px;
-        margin: 10px 0;
-        border: 2px dashed #667eea;
-    }
-    
-    .search-section {
-        background: #ffffff;
-        border-radius: 10px;
-        padding: 20px;
-        margin: 10px 0;
-        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
-    }
-    
-    /* 按钮样式 */
-    .gr-button {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        color: white;
-        border: none;
-        border-radius: 6px;
-        padding: 8px 16px;
-        font-weight: 500;
-        transition: all 0.3s ease;
-    }
-    
-    .gr-button:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 4px 8px rgba(102, 126, 234, 0.4);
-    }
-    
-    /* 输入框样式 */
-    .gr-textbox, .gr-file {
-        border-radius: 8px;
-        border: 1px solid #e0e0e0;
-        transition: all 0.3s ease;
-    }
-    
-    .gr-textbox:focus, .gr-file:focus {
-        border-color: #667eea;
-        box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
-    }
-    
-    /* 聊天框样式 */
+
     .chatbot-container {
         border-radius: 12px;
         overflow: hidden;
         box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
     }
-    
-    /* Tab样式 */
-    .tabs {
-        border-radius: 8px;
-        overflow: hidden;
-    }
-    
-    .tab-item {
-        background: #f8f9fa;
-        border: none;
-        padding: 12px 24px;
-        font-weight: 500;
-        transition: all 0.3s ease;
-    }
-    
-    .tab-item:hover {
-        background: #e9ecef;
-    }
-    
-    .tab-item.active {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        color: white;
-    }
-    
-    /* 数据表格样式 */
-    .dataframe {
-        border-radius: 8px;
-        overflow: hidden;
-        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
-    }
     """
-    
+
     with gr.Blocks(
-        title="智能助手系统",
+        title="智能助手系统 - stdio版本",
         theme=gr.themes.Soft(
             primary_hue="purple",
             secondary_hue="blue",
@@ -679,18 +612,18 @@ def gradio_app():
         ),
         css=custom_css
     ) as demo:
-        
+
         # 添加静态文件路由
         demo.launch_kwargs = {"allowed_paths": [os.path.join(os.getcwd(), "upload_files")]}
-        
+
         # 美化的标题区域
         gr.HTML("""
         <div class="main-header">
-            <h1 style="margin: 0; font-size: 2.8em; font-weight: 800; color: #ffffff; text-shadow: 2px 2px 4px rgba(0,0,0,0.3); letter-spacing: 1px;">🤖 智能助手系统</h1>
-            <p style="margin: 15px 0 0 0; font-size: 1.3em; color: #f8f9fa; font-weight: 500; text-shadow: 1px 1px 2px rgba(0,0,0,0.2);">支持城市分级查询和发票OCR识别功能</p>
+            <h1 style="margin: 0; font-size: 2.8em; font-weight: 800; color: #ffffff; text-shadow: 2px 2px 4px rgba(0,0,0,0.3); letter-spacing: 1px;">🤖 智能助手系统 - stdio版本</h1>
+            <p style="margin: 15px 0 0 0; font-size: 1.3em; color: #f8f9fa; font-weight: 500; text-shadow: 1px 1px 2px rgba(0,0,0,0.2);">支持城市分级查询和发票OCR识别功能 (使用stdio协议)</p>
         </div>
         """)
-        
+
         with gr.Tabs():
             # 聊天Tab
             with gr.TabItem("💬 聊天助手"):
@@ -704,7 +637,7 @@ def gradio_app():
                             <span id="ocr-status" style="margin-left: 10px; padding: 4px 8px; background: #f8d7da; color: #721c24; border-radius: 12px; font-size: 11px;">发票OCR识别 ❌</span>
                         </div>
                         """)
-                    
+
                     # 隐藏的状态变量，用于JavaScript更新
                     city_status_display = gr.Textbox(visible=False, value="❌ Not connected")
                     ocr_status_display = gr.Textbox(visible=False, value="❌ Not connected")
@@ -712,11 +645,11 @@ def gradio_app():
                 # 美化的聊天界面
                 gr.HTML("""
                 <div class="tab-header">
-                    <h3 style="margin: 0; color: #495057;">💬 智能对话</h3>
+                    <h3 style="margin: 0; color: #495057;">💬 智能对话 (stdio协议)</h3>
                     <p style="margin: 5px 0 0 0; color: #6c757d; font-size: 14px;">与AI助手进行对话，支持文本和图片OCR识别</p>
                 </div>
                 """)
-                
+
                 chatbot = gr.Chatbot(
                     value=[],
                     height=500,
@@ -750,117 +683,59 @@ def gradio_app():
                 msg.submit(client.process_message, [msg, chatbot, image_upload], [chatbot, msg, image_upload])
                 submit_btn.click(client.process_message, [msg, chatbot, image_upload], [chatbot, msg, image_upload])
                 clear_btn.click(lambda: [], None, chatbot)
-                
-                # 美化的JavaScript函数来更新状态显示
-                gr.HTML("""
-                <script>
-                function updateServerStatus(cityStatus, ocrStatus) {
-                    const cityElement = document.getElementById('city-status');
-                    const ocrElement = document.getElementById('ocr-status');
-                    
-                    if (cityElement) {
-                        if (cityStatus.includes('✅')) {
-                            cityElement.style.background = '#d4edda';
-                            cityElement.style.color = '#155724';
-                            cityElement.textContent = '🟢 城市分级查询 已连接';
-                        } else {
-                            cityElement.style.background = '#f8d7da';
-                            cityElement.style.color = '#721c24';
-                            cityElement.textContent = '🔴 城市分级查询 未连接';
-                        }
-                    }
-                    
-                    if (ocrElement) {
-                        if (ocrStatus.includes('✅')) {
-                            ocrElement.style.background = '#d4edda';
-                            ocrElement.style.color = '#155724';
-                            ocrElement.textContent = '🟢 发票OCR识别 已连接';
-                        } else {
-                            ocrElement.style.background = '#f8d7da';
-                            ocrElement.style.color = '#721c24';
-                            ocrElement.textContent = '🔴 发票OCR识别 未连接';
-                        }
-                    }
-                }
-                
-                // 监听隐藏状态变量的变化
-                const observer = new MutationObserver(function(mutations) {
-                    mutations.forEach(function(mutation) {
-                        if (mutation.type === 'childList' || mutation.type === 'subtree') {
-                            const cityStatus = document.querySelector('#city-status-display textarea')?.value || '';
-                            const ocrStatus = document.querySelector('#ocr-status-display textarea')?.value || '';
-                            updateServerStatus(cityStatus, ocrStatus);
-                        }
-                    });
-                });
-                
-                // 观察整个文档的变化
-                observer.observe(document.body, {
-                    childList: true,
-                    subtree: true
-                });
-                
-                // 初始化状态显示
-                document.addEventListener('DOMContentLoaded', function() {
-                    updateServerStatus('❌ Not connected', '❌ Not connected');
-                });
-                </script>
-                """)
-            
+
             # 设置Tab
             with gr.TabItem("⚙️ 设置"):
                 gr.HTML("""
                 <div class="tab-header">
-                    <h3 style="margin: 0; color: #495057;">⚙️ 系统设置</h3>
+                    <h3 style="margin: 0; color: #495057;">⚙️ 系统设置 (stdio协议)</h3>
                     <p style="margin: 5px 0 0 0; color: #6c757d; font-size: 14px;">配置MCP服务器连接和API参数</p>
                 </div>
                 """)
-                
+
                 with gr.Row():
                     with gr.Column():
                         gr.HTML("""
                         <div class="config-section">
-                            <h4 style="margin: 0 0 15px 0; color: #495057;">🏙️ 城市分级查询服务器配置</h4>
+                            <h4 style="margin: 0 0 15px 0; color: #495057;">🏙️ 城市分级查询服务器配置 (stdio)</h4>
                         </div>
                         """)
-                        city_server_config = gr.Textbox(
-                            label="🌐 服务器地址",
-                            placeholder="http://0.0.0.0:8080/sse",
-                            value=CITY_SERVER_URL,
+                        city_server_command = gr.Textbox(
+                            label="🖥️ 服务器命令",
+                            placeholder="python mcp_citytier_stdio.py",
+                            value="python mcp_citytier_stdio.py",
                         )
                         city_server_name = gr.Textbox(
                             label="📝 服务器名称",
-                            placeholder="city_server",
-                            value="city_server",
+                            placeholder="city_server_stdio",
+                            value="city_server_stdio",
                         )
                         with gr.Row():
                             city_config_test_btn = gr.Button("🔍 测试连接", variant="secondary")
                             city_config_connect_btn = gr.Button("🔗 连接", variant="primary")
-                            city_config_save_btn = gr.Button("💾 保存配置", variant="secondary")
                         city_config_status = gr.Textbox(label="📊 状态", value="未配置", interactive=False)
-                    
+
                     with gr.Column():
                         gr.HTML("""
                         <div class="config-section">
-                            <h4 style="margin: 0 0 15px 0; color: #495057;">📄 发票OCR识别服务器配置</h4>
+                            <h4 style="margin: 0 0 15px 0; color: #495057;">📄 发票OCR识别服务器配置 (stdio)</h4>
                         </div>
                         """)
-                        ocr_server_config = gr.Textbox(
-                            label="🌐 服务器地址",
-                            placeholder="http://0.0.0.0:8081/sse",
-                            value=INVOICE_OCR_SERVER_URL,
+                        ocr_server_command = gr.Textbox(
+                            label="🖥️ 服务器命令",
+                            placeholder="python mcp_invoice_stdio.py",
+                            value="python mcp_invoice_stdio.py",
                         )
                         ocr_server_name = gr.Textbox(
                             label="📝 服务器名称",
-                            placeholder="ocr_server",
-                            value="ocr_server",
+                            placeholder="ocr_server_stdio",
+                            value="ocr_server_stdio",
                         )
                         with gr.Row():
                             ocr_config_test_btn = gr.Button("🔍 测试连接", variant="secondary")
                             ocr_config_connect_btn = gr.Button("🔗 连接", variant="primary")
-                            ocr_config_save_btn = gr.Button("💾 保存配置", variant="secondary")
                         ocr_config_status = gr.Textbox(label="📊 状态", value="未配置", interactive=False)
-                
+
                 with gr.Row():
                     gr.HTML("""
                     <div class="config-section">
@@ -885,32 +760,26 @@ def gradio_app():
                     )
                     api_save_btn = gr.Button("💾 保存API配置", variant="primary")
                     api_status = gr.Textbox(label="📊 API状态", value="未配置", interactive=False)
-                
+
                 # 设置tab的事件绑定
-                def test_city_config(url):
-                    return client.test_connection(url, "city_server")
-                
-                def test_ocr_config(url):
-                    return client.test_connection(url, "ocr_server")
-                
-                def connect_city_server(url):
-                    result = client.connect(url, "city_server")
+                def test_city_config(command):
+                    command_list = command.split()
+                    return client.test_connection(command_list, "city_server_stdio")
+
+                def test_ocr_config(command):
+                    command_list = command.split()
+                    return client.test_connection(command_list, "ocr_server_stdio")
+
+                def connect_city_server(command):
+                    command_list = command.split()
+                    result = client.connect(command_list, "city_server_stdio")
                     return result, result
-                
-                def connect_ocr_server(url):
-                    result = client.connect(url, "ocr_server")
+
+                def connect_ocr_server(command):
+                    command_list = command.split()
+                    result = client.connect(command_list, "ocr_server_stdio")
                     return result, result
-                
-                def save_city_config(url, name):
-                    global CITY_SERVER_URL
-                    CITY_SERVER_URL = url
-                    return f"✅ 城市服务器配置已保存: {url}"
-                
-                def save_ocr_config(url, name):
-                    global INVOICE_OCR_SERVER_URL
-                    INVOICE_OCR_SERVER_URL = url
-                    return f"✅ OCR服务器配置已保存: {url}"
-                
+
                 def save_api_config(api_key, base_url, model_name):
                     global API_KEY, BASE_URL, MODEL_NAME
                     API_KEY = api_key
@@ -922,113 +791,12 @@ def gradio_app():
                         base_url=BASE_URL
                     )
                     return "✅ API配置已保存"
-                
-                city_config_test_btn.click(test_city_config, inputs=city_server_config, outputs=city_config_status)
-                city_config_connect_btn.click(connect_city_server, inputs=city_server_config, outputs=[city_config_status, city_status_display])
-                city_config_save_btn.click(save_city_config, inputs=[city_server_config, city_server_name], outputs=city_config_status)
-                ocr_config_test_btn.click(test_ocr_config, inputs=ocr_server_config, outputs=ocr_config_status)
-                ocr_config_connect_btn.click(connect_ocr_server, inputs=ocr_server_config, outputs=[ocr_config_status, ocr_status_display])
-                ocr_config_save_btn.click(save_ocr_config, inputs=[ocr_server_config, ocr_server_name], outputs=ocr_config_status)
+
+                city_config_test_btn.click(test_city_config, inputs=city_server_command, outputs=city_config_status)
+                city_config_connect_btn.click(connect_city_server, inputs=city_server_command, outputs=[city_config_status, city_status_display])
+                ocr_config_test_btn.click(test_ocr_config, inputs=ocr_server_command, outputs=ocr_config_status)
+                ocr_config_connect_btn.click(connect_ocr_server, inputs=ocr_server_command, outputs=[ocr_config_status, ocr_status_display])
                 api_save_btn.click(save_api_config, inputs=[api_key_input, base_url_input, model_name_input], outputs=api_status)
-            
-            # 知识库Tab
-            with gr.TabItem("📚 知识库"):
-                gr.HTML("""
-                <div class="tab-header">
-                    <h3 style="margin: 0; color: #495057;">📚 知识库管理</h3>
-                    <p style="margin: 5px 0 0 0; color: #6c757d; font-size: 14px;">上传、管理和搜索文档知识库</p>
-                </div>
-                """)
-                
-                with gr.Row():
-                    with gr.Column(scale=1):
-                        gr.HTML("""
-                        <div class="upload-section">
-                            <h4 style="margin: 0 0 15px 0; color: #495057;">📤 上传文档</h4>
-                            <p style="margin: 0 0 15px 0; color: #6c757d; font-size: 13px;">支持 .txt, .pdf, .doc, .docx, .md 格式</p>
-                        </div>
-                        """)
-                        doc_upload = gr.File(
-                            label="📁 选择文档文件",
-                            file_types=[".txt", ".pdf", ".doc", ".docx", ".md"],
-                            file_count="multiple"
-                        )
-                        upload_btn = gr.Button("📤 上传文档", variant="primary")
-                        upload_status = gr.Textbox(label="📊 上传状态", value="等待上传", interactive=False)
-                    
-                    with gr.Column(scale=1):
-                        gr.HTML("""
-                        <div class="config-section">
-                            <h4 style="margin: 0 0 15px 0; color: #495057;">📋 文档列表</h4>
-                        </div>
-                        """)
-                        doc_list = gr.DataFrame(
-                            headers=["文件名", "大小", "上传时间"],
-                            datatype=["str", "str", "str"],
-                            value=[],
-                            elem_classes=["dataframe"]
-                        )
-                        with gr.Row():
-                            refresh_btn = gr.Button("🔄 刷新列表", variant="secondary")
-                            delete_btn = gr.Button("🗑️ 删除选中", variant="secondary")
-                
-                with gr.Row():
-                    gr.HTML("""
-                    <div class="search-section">
-                        <h4 style="margin: 0 0 15px 0; color: #495057;">🔍 知识库搜索</h4>
-                    </div>
-                    """)
-                    search_query = gr.Textbox(
-                        label="🔍 搜索关键词",
-                        placeholder="输入搜索关键词...",
-                        elem_classes=["search-input"]
-                    )
-                    search_btn = gr.Button("🔍 搜索", variant="primary")
-                    search_results = gr.DataFrame(
-                        headers=["文档", "相关内容", "匹配度"],
-                        datatype=["str", "str", "str"],
-                        value=[],
-                        elem_classes=["dataframe"]
-                    )
-                
-                # 知识库tab的事件绑定
-                def upload_documents(files):
-                    if not files:
-                        return "❌ 请选择要上传的文件"
-                    
-                    uploaded_files = []
-                    for file in files:
-                        try:
-                            # 这里可以添加实际的文件处理逻辑
-                            file_name = file.name if hasattr(file, 'name') else str(file)
-                            uploaded_files.append(file_name)
-                        except Exception as e:
-                            return f"❌ 上传失败: {str(e)}"
-                    
-                    return f"✅ 成功上传 {len(uploaded_files)} 个文件: {', '.join(uploaded_files)}"
-                
-                def refresh_document_list():
-                    # 这里可以添加实际的文档列表获取逻辑
-                    return [["示例文档.txt", "1.2KB", "2025-08-22 14:20"]]
-                
-                def delete_selected_documents(selected_rows):
-                    if not selected_rows:
-                        return "❌ 请选择要删除的文档"
-                    return f"✅ 已删除 {len(selected_rows)} 个文档"
-                
-                def search_knowledge_base(query):
-                    if not query:
-                        return [["", "", ""]]
-                    # 这里可以添加实际的搜索逻辑
-                    return [
-                        ["示例文档.txt", "这是与搜索相关的内容片段...", "95%"],
-                        ["另一个文档.pdf", "另一个相关的内容片段...", "78%"]
-                    ]
-                
-                upload_btn.click(upload_documents, inputs=doc_upload, outputs=upload_status)
-                refresh_btn.click(refresh_document_list, outputs=doc_list)
-                delete_btn.click(delete_selected_documents, inputs=doc_list, outputs=upload_status)
-                search_btn.click(search_knowledge_base, inputs=search_query, outputs=search_results)
 
     return demo
 
@@ -1038,8 +806,8 @@ if __name__ == "__main__":
     os.makedirs(os.path.join(os.getcwd(), "upload_files"), exist_ok=True)
 
     # 启动文件服务器
-    file_server_base_url = start_file_server(8888)
+    file_server_base_url = start_file_server(8889)
     logger.info(f"文件服务器已启动: {file_server_base_url}")
 
     demo = gradio_app()
-    demo.launch(debug=True, allowed_paths=["upload_files"])
+    demo.launch(debug=True, server_port=7861, allowed_paths=["upload_files"])

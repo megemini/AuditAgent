@@ -10,3 +10,6 @@ wheels/
 # Virtual environments
 .venv
 venv
+
+# Uploaded files
+upload_files/
