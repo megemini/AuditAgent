@@ -3,12 +3,15 @@ import atexit
 import functools
 from queue import Queue
 from threading import Event, Thread
+import os
+import tempfile
 
 from paddleocr import PaddleOCR, draw_ocr
 from PIL import Image
 import gradio as gr
 from modelscope import AutoModelForCausalLM, AutoTokenizer
 import json
+import fitz  # PyMuPDF
 
 
 LANG_CONFIG = {
@@ -103,12 +106,13 @@ def validate_and_fix_fields(invoice_fields):
     """Validate and fix extracted invoice fields"""
     import re
     
-    # Define phone number patterns
+    # Define phone number patterns - more specific patterns first
     phone_patterns = [
-        r'[\d\s\-\(\)\+]+',  # Basic phone pattern with digits, spaces, dashes, parentheses, plus
-        r'1[3-9]\d{9}',      # Chinese mobile number pattern
-        r'\d{3,4}[-\s]?\d{7,8}',  # Landline pattern
-        r'\+?\d{1,3}[-\s]?\d{3,4}[-\s]?\d{4,6}[-\s]?\d{4,6}'  # International format
+        r'1[3-9]\d{9}',      # Chinese mobile number pattern (11 digits starting with 1)
+        r'\d{3,4}[-\s]?\d{7,8}',  # Landline pattern with area code
+        r'\+?\d{1,3}[-\s]?\d{3,4}[-\s]?\d{4,6}[-\s]?\d{4,6}',  # International format
+        r'[\d\s\-\(\)\+]{7,}',  # Basic phone pattern with digits, spaces, dashes, parentheses, plus (min 7 chars)
+        r'\d{7,}'            # Just digits (at least 7)
     ]
     
     # Validate and extract phone number from buyer and seller address fields
@@ -116,34 +120,111 @@ def validate_and_fix_fields(invoice_fields):
         address = invoice_fields[party_type]["地址"]
         phone = invoice_fields[party_type]["电话"]
         
-        # First, check if current phone is valid
-        phone_valid = False
-        if phone != "无":
-            for pattern in phone_patterns:
-                if re.search(pattern, phone):
-                    phone_valid = True
-                    break
-            if not phone_valid:
-                invoice_fields[party_type]["电话"] = "无"
+        # First, try to extract potential phone numbers from address
+        address_phone = None
+        clean_address = address
         
-        # If phone is invalid or empty, try to extract from address
-        if phone == "无" and address != "无":
-            # Look for phone patterns at the end of address
+        if address != "无":
+            # Strategy 1: Look for phone patterns at the end of address
             for pattern in phone_patterns:
-                # Try to find phone number at the end of address
                 phone_match = re.search(r'(.+?)\s*(' + pattern + r')\s*$', address)
                 if phone_match:
-                    # Extract address and phone
                     clean_address = phone_match.group(1).strip()
                     extracted_phone = phone_match.group(2).strip()
+                    # Clean the extracted phone
+                    extracted_phone = re.sub(r'[<>*]', '', extracted_phone)
                     
                     # Validate the extracted phone
                     for phone_pattern in phone_patterns:
-                        if re.search(phone_pattern, extracted_phone):
-                            invoice_fields[party_type]["地址"] = clean_address
-                            invoice_fields[party_type]["电话"] = extracted_phone
+                        if re.fullmatch(phone_pattern, extracted_phone.replace(' ', '').replace('-', '')):
+                            address_phone = extracted_phone
                             break
                     break
+            
+            # Strategy 2: If no clear phone pattern, look for any 7+ digit sequence in address
+            if address_phone is None:
+                # Look for sequences of 7+ digits
+                digit_sequences = re.findall(r'\d{7,}', address)
+                if digit_sequences:
+                    # Take the longest sequence
+                    extracted_phone = max(digit_sequences, key=len)
+                    # Try to format it reasonably
+                    if len(extracted_phone) == 11 and extracted_phone.startswith('1'):
+                        # Mobile number format
+                        formatted_phone = extracted_phone
+                    elif len(extracted_phone) >= 7:
+                        # Try to format as landline
+                        if len(extracted_phone) >= 10:
+                            formatted_phone = f"{extracted_phone[:3]}-{extracted_phone[3:]}"
+                        else:
+                            formatted_phone = extracted_phone
+                    else:
+                        formatted_phone = extracted_phone
+                    
+                    address_phone = formatted_phone
+                    # Remove the phone from address if found
+                    clean_address = re.sub(r'\s*\d{7,}\s*$', '', address).strip()
+            
+            # Strategy 3: Look for area code + number combination in address
+            if address_phone is None:
+                # Look for area code pattern in address (like 0691) and separate digits
+                area_code_match = re.search(r'(\d{3,4})[^\d]*(\d+)', address)
+                if area_code_match:
+                    area_code = area_code_match.group(1)
+                    number_part = area_code_match.group(2)
+                    # Combine them with proper formatting
+                    combined_phone = f"{area_code}-{number_part}"
+                    address_phone = combined_phone
+                    # Clean the address by removing the phone number parts
+                    clean_address = re.sub(r'\s*\d{3,4}[^\d]*\d+\s*$', '', address).strip()
+        
+        # Now validate the AI-returned phone number
+        phone_valid = False
+        final_phone = "无"
+        
+        if phone != "无":
+            # Clean the phone number first - remove special characters that aren't part of phone format
+            clean_phone = re.sub(r'[<>*]', '', phone)  # Remove problematic characters
+            for pattern in phone_patterns:
+                if re.fullmatch(pattern, clean_phone.replace(' ', '').replace('-', '')):
+                    phone_valid = True
+                    final_phone = clean_phone
+                    break
+            
+            if not phone_valid:
+                # Try to extract any valid phone number from the invalid phone string
+                for pattern in phone_patterns:
+                    phone_match = re.search(pattern, phone)
+                    if phone_match:
+                        extracted = phone_match.group(0)
+                        # Clean up the extracted phone
+                        extracted = re.sub(r'[<>*]', '', extracted)
+                        final_phone = extracted
+                        phone_valid = True
+                        break
+        
+        # If AI-returned phone is invalid but we found a phone in address, use the address phone
+        if not phone_valid and address_phone is not None:
+            final_phone = address_phone
+            invoice_fields[party_type]["地址"] = clean_address
+        # If AI-returned phone is valid but we also found a phone in address,
+        # try to determine which one is more correct or combine them
+        elif phone_valid and address_phone is not None:
+            # If AI phone is very short or contains suspicious characters, prefer address phone
+            if len(phone.replace(' ', '').replace('-', '')) < 7 or any(c in phone for c in '<*>'):
+                final_phone = address_phone
+                invoice_fields[party_type]["地址"] = clean_address
+            # If AI phone looks like a partial number (e.g., just "6631116" when address has "0691-6631116")
+            # try to combine them
+            elif len(phone.replace(' ', '').replace('-', '')) < 10 and address_phone.startswith('0'):
+                # Check if the AI phone is contained in the address phone
+                clean_ai_phone = phone.replace(' ', '').replace('-', '')
+                clean_address_phone = address_phone.replace(' ', '').replace('-', '')
+                if clean_ai_phone in clean_address_phone:
+                    final_phone = address_phone
+                    invoice_fields[party_type]["地址"] = clean_address
+        
+        invoice_fields[party_type]["电话"] = final_phone
         
         # Validate bank account format (should contain digits)
         bank_account = invoice_fields[party_type]["开户行账号"]
@@ -414,16 +495,49 @@ OCR文本：
         return validate_and_fix_fields(empty_result)
 
 
-def inference(img, lang):
-    ocr = model_managers[lang]
-    result = ocr.infer(img, cls=True)[0]
-    img_path = img
-    image = Image.open(img_path).convert("RGB")
-    boxes = [line[0] for line in result]
-    txts = [line[1][0] for line in result]
-    scores = [line[1][1] for line in result]
-    im_show = draw_ocr(image, boxes, txts, scores,
-                    font_path="./simfang.ttf")
+def extract_text_from_pdf(pdf_path, lang):
+    """Extract text from PDF file using PyMuPDF"""
+    all_text = []
+    
+    # Extract text directly from PDF using PyMuPDF
+    try:
+        doc = fitz.open(pdf_path)
+        for page in doc:
+            text = page.get_text()
+            if text:
+                # Split text into lines and add to all_text
+                lines = text.split('\n')
+                for line in lines:
+                    if line.strip():  # Only add non-empty lines
+                        all_text.append(line.strip())
+        doc.close()
+    except Exception as e:
+        print(f"Error extracting text with PyMuPDF: {e}")
+    
+    return all_text
+
+
+def inference(file_path, lang):
+    """Process both image and PDF files"""
+    # Check if file is PDF
+    if file_path.lower().endswith('.pdf'):
+        # Extract text from PDF
+        txts = extract_text_from_pdf(file_path, lang)
+        
+        # For PDF, we can't draw OCR boxes, so return None for image
+        im_show = None
+    else:
+        # Process as image
+        ocr = model_managers[lang]
+        result = ocr.infer(file_path, cls=True)[0]
+        img_path = file_path
+        image = Image.open(img_path).convert("RGB")
+        boxes = [line[0] for line in result]
+        txts = [line[1][0] for line in result]
+        scores = [line[1][1] for line in result]
+        im_show = draw_ocr(image, boxes, txts, scores,
+                        font_path="./simfang.ttf")
+    
     print('-----', txts)
     
     # Extract invoice fields using AI
@@ -444,15 +558,15 @@ css = ".output_image, .input_image {height: 40rem !important; width: 100% !impor
 gr.Interface(
     inference,
     [
-        gr.Image(type='filepath', label='Input'),
+        gr.File(type='filepath', label='Input (Image or PDF)'),
         gr.Dropdown(choices=list(LANG_CONFIG.keys()), value='ch', label='language')
     ],
     [
-        gr.Image(type='pil', label='Output'),
+        gr.Image(type='pil', label='Output (OCR visualization for images only)'),
         gr.JSON(label='Extracted Invoice Fields')
     ],
     title=title,
-    description=description,
+    description=description + '\n- Now supports both image and PDF files for invoice processing.',
     cache_examples=False,
     css=css,
     concurrency_limit=CONCURRENCY_LIMIT,
