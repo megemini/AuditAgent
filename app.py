@@ -701,7 +701,9 @@ def connect_invoice_server_with_session(command, session_id: str):
         return "❌ MCP客户端未初始化"
     
     try:
-        command_list = command.split()
+        # Substitute parameters from Step 1
+        substituted_command = substitute_command_parameters(command, session_id)
+        command_list = substituted_command.split()
         result = mcp_client.connect(command_list, "invoice_server")
         return result
     except Exception as e:
@@ -731,11 +733,40 @@ def test_invoice_server_with_session(command, session_id: str):
         return "❌ MCP客户端未初始化"
     
     try:
-        command_list = command.split()
+        # Substitute parameters from Step 1
+        substituted_command = substitute_command_parameters(command, session_id)
+        command_list = substituted_command.split()
         result = mcp_client.test_connection(command_list, "invoice_server")
         return result
     except Exception as e:
         return f"❌ 测试发票识别LLM服务器连接失败: {str(e)}"
+
+def substitute_command_parameters(command, session_id: str):
+    """Substitute parameters in command with values from Step 1"""
+    session_data = session_store.get(session_id, {})
+    
+    # Get parameters from session
+    model = session_data.get("model", "")
+    client = session_data.get("client")
+    
+    # Extract API key and base URL from client if available
+    api_key = ""
+    base_url = ""
+    if client and hasattr(client, 'api_key'):
+        api_key = client.api_key
+    if client and hasattr(client, 'base_url'):
+        base_url = str(client.base_url)  # Ensure base_url is converted to string
+    
+    # Substitute parameters in command
+    substituted_command = command
+    if "$model_name" in substituted_command and model:
+        substituted_command = substituted_command.replace("$model_name", model)
+    if "$api_key" in substituted_command and api_key:
+        substituted_command = substituted_command.replace("$api_key", api_key)
+    if "$base_url" in substituted_command and base_url:
+        substituted_command = substituted_command.replace("$base_url", base_url)
+    
+    return substituted_command
 
 def get_mcp_server_status(session_id: str):
     """Get the status of connected MCP servers"""
@@ -808,12 +839,14 @@ class AuditAgentApp:
                 
                 base_url_input = gr.Textbox(
                     label="Base URL",
-                    placeholder="请输入 OpenAI API 的 Base URL (例如: https://api.openai.com/v1)"
+                    placeholder="请输入 OpenAI API 的 Base URL (例如: https://api.openai.com/v1)",
+                    value="https://api-inference.modelscope.cn/v1"
                 )
                 
                 model_input = gr.Textbox(
                     label="Model",
-                    placeholder="请输入模型名称 (例如: gpt-3.5-turbo)"
+                    placeholder="请输入模型名称 (例如: gpt-3.5-turbo)",
+                    value="Qwen/Qwen3-235B-A22B"
                 )
                 
                 test_connection_btn = gr.Button("测试连接", variant="primary")
@@ -903,8 +936,8 @@ class AuditAgentApp:
                     
                 invoice_server_command = gr.Textbox(
                     label="服务器命令",
-                    placeholder="python mcp_invoice_stdio.py",
-                    value="python mcp_invoice_stdio.py"
+                    placeholder="python mcp_invoice_stdio.py -- --model_name $model_name --api_key $api_key --base_url $base_url",
+                    value="python mcp_invoice_stdio.py -- --model_name $model_name --api_key $api_key --base_url $base_url"
                 )
                     
                 with gr.Row():

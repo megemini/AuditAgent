@@ -8,6 +8,7 @@ import base64
 import tempfile
 import os
 import requests
+import argparse
 from fastmcp import FastMCP
 from invoice_core import inference
 
@@ -199,6 +200,21 @@ def get_invoice_template_info() -> dict:
     }
 
 if __name__ == "__main__":
+    # 解析命令行参数
+    parser = argparse.ArgumentParser(description="发票 OCR 识别 MCP Server")
+    parser.add_argument("--model_name", type=str, help="模型名称", default="qwen3-0.6b")
+    parser.add_argument("--api_key", type=str, help="API 密钥", default="")
+    parser.add_argument("--base_url", type=str, help="API 基础 URL", default="")
+    
+    args = parser.parse_args()
+    
+    # 将参数存储为全局变量，供工具使用
+    MODEL_NAME = args.model_name
+    API_KEY = args.api_key
+    BASE_URL = args.base_url
+    
+    print(f"启动发票 OCR 识别 MCP Server，使用模型: {MODEL_NAME}")
+    
     mcp.run(
         transport="stdio"  # 使用 stdio 传输协议
     )
