@@ -705,7 +705,7 @@ def connect_invoice_server_with_session(command, session_id: str):
         result = mcp_client.connect(command_list, "invoice_server")
         return result
     except Exception as e:
-        return f"❌ 连接发票OCR服务器失败: {str(e)}"
+        return f"❌ 连接发票识别LLM服务器失败: {str(e)}"
 
 def test_city_server_with_session(command, session_id: str):
     """Test connection to city tier MCP server"""
@@ -735,7 +735,7 @@ def test_invoice_server_with_session(command, session_id: str):
         result = mcp_client.test_connection(command_list, "invoice_server")
         return result
     except Exception as e:
-        return f"❌ 测试发票OCR服务器连接失败: {str(e)}"
+        return f"❌ 测试发票识别LLM服务器连接失败: {str(e)}"
 
 def get_mcp_server_status(session_id: str):
     """Get the status of connected MCP servers"""
@@ -864,43 +864,57 @@ class AuditAgentApp:
         with gr.Row():
             with gr.Column():
                 gr.Markdown("## MCP服务器管理")
-                gr.Markdown("在此步骤中，您可以连接和管理MCP（Model Context Protocol）服务器，包括城市分级查询和发票OCR识别服务器。")
+                gr.Markdown("在此步骤中，您可以连接和管理MCP（Model Context Protocol）服务器，包括城市分级查询和发票识别LLM服务器。")
                 
                 # City Tier Server Configuration
-                with gr.Group():
-                    gr.Markdown("### 🏙️ 城市分级查询服务器")
-                    city_server_command = gr.Textbox(
-                        label="服务器命令",
-                        placeholder="python mcp_citytier_stdio.py",
-                        value="python mcp_citytier_stdio.py"
-                    )
-                    
-                    with gr.Row():
-                        city_test_btn = gr.Button("测试连接", variant="secondary")
-                        city_connect_btn = gr.Button("连接服务器", variant="primary")
-                    
-                    city_status = gr.Textbox(
-                        label="连接状态",
-                        interactive=False
-                    )
+                gr.Markdown("### 🏙️ 城市分级查询服务器")
+                city_server_command = gr.Textbox(
+                    label="服务器命令",
+                    placeholder="python mcp_citytier_stdio.py",
+                    value="python mcp_citytier_stdio.py"
+                )
                 
-                # Invoice OCR Server Configuration
-                with gr.Group():
-                    gr.Markdown("### 📄 发票识别LLM服务器")
-                    invoice_server_command = gr.Textbox(
-                        label="服务器命令",
-                        placeholder="python mcp_invoice_stdio.py",
-                        value="python mcp_invoice_stdio.py"
-                    )
+                with gr.Row():
+                    city_test_btn = gr.Button("测试连接", variant="secondary")
+                    city_connect_btn = gr.Button("连接服务器", variant="primary")
+                
+                city_status = gr.Textbox(
+                    label="连接状态",
+                    interactive=False
+                )
+                
+                # Invoice Server Configuration
+                gr.Markdown("### 📄 发票识别LLM服务器")
+                gr.Markdown("""
+                **架构说明：**
+                - 📋 **多格式支持**: 处理图片文件（JPG、PNG等）和PDF文档
+                - 🔍 **先进OCR技术**: 使用PaddleOCR进行准确的文本提取
+                - 🤖 **AI驱动分析**: 利用大模型进行智能字段提取
+                - 🔒 **隐私保护**: 所有处理都在本地进行，确保敏感发票数据安全
+                
+                **技术架构：**
+                1. **文档处理**:
+                   - 🖼️ 图片：使用PaddleOCR进行OCR处理
+                   - 📑 PDF：使用PyMuPDF直接提取文本
+                2. **信息提取**:
+                   - 🤖 使用大模型进行智能字段解析
+                   - ✅ 高级验证和纠正算法
+                """)
                     
-                    with gr.Row():
-                        invoice_test_btn = gr.Button("测试连接", variant="secondary")
-                        invoice_connect_btn = gr.Button("连接服务器", variant="primary")
+                invoice_server_command = gr.Textbox(
+                    label="服务器命令",
+                    placeholder="python mcp_invoice_stdio.py",
+                    value="python mcp_invoice_stdio.py"
+                )
                     
-                    invoice_status = gr.Textbox(
-                        label="连接状态",
-                        interactive=False
-                    )
+                with gr.Row():
+                    invoice_test_btn = gr.Button("测试连接", variant="secondary")
+                    invoice_connect_btn = gr.Button("连接服务器", variant="primary")
+                
+                invoice_status = gr.Textbox(
+                    label="连接状态",
+                    interactive=False
+                )
                 
         # Set up event handlers for MCP server management
         city_test_btn.click(
@@ -957,6 +971,7 @@ class AuditAgentApp:
                     interactive=False,
                     height=200
                 )
+                gr.Markdown("*免责声明：此示例发票图片仅用于演示目的，图片来源于网络。*")
             
             with gr.Column(scale=2):
                 gr.Markdown("## 对话记录")
