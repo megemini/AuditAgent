@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-发票 OCR 识别 MCP Server (stdio版本)
+发票识别LLM MCP Server (stdio版本)
 使用 FastMCP 和 stdio 协议
 """
 
@@ -13,7 +13,7 @@ from fastmcp import FastMCP
 from invoice_core import inference
 
 # 创建 FastMCP 应用
-mcp = FastMCP("发票OCR识别")
+mcp = FastMCP("发票识别LLM")
 
 def download_image(image_url):
     """
@@ -196,12 +196,12 @@ def get_invoice_template_info() -> dict:
             "税率", "税额", "价税合计", "合计金额", "合计税额",
             "收款人", "复核", "开票人", "备注"
         ],
-        "message": "发票OCR识别系统支持多种发票类型和字段提取"
+        "message": "发票识别LLM系统支持多种发票类型和字段提取"
     }
 
 if __name__ == "__main__":
     # 解析命令行参数
-    parser = argparse.ArgumentParser(description="发票 OCR 识别 MCP Server")
+    parser = argparse.ArgumentParser(description="发票识别LLM MCP Server")
     parser.add_argument("--model_name", type=str, help="模型名称", default="qwen3-0.6b")
     parser.add_argument("--api_key", type=str, help="API 密钥", default="")
     parser.add_argument("--base_url", type=str, help="API 基础 URL", default="")
@@ -213,7 +213,7 @@ if __name__ == "__main__":
     API_KEY = args.api_key
     BASE_URL = args.base_url
     
-    print(f"启动发票 OCR 识别 MCP Server，使用模型: {MODEL_NAME}")
+    print(f"启动发票识别LLM MCP Server，使用模型: {MODEL_NAME}")
     
     mcp.run(
         transport="stdio"  # 使用 stdio 传输协议
