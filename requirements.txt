@@ -11,3 +11,4 @@ requests
 # accelerate
 PyMuPDF
 openai
+python-docx
