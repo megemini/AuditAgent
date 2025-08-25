@@ -9,7 +9,7 @@ import tempfile
 import os
 import requests
 from fastmcp import FastMCP
-from invoice_core import inference
+from invoice_core_llm import inference
 
 # 创建 FastMCP 应用
 mcp = FastMCP("发票识别LLM")
@@ -46,13 +46,18 @@ def download_image(image_url):
         raise e
 
 @mcp.tool()
-def recognize_single_invoice(image_url: str = None, image_data: str = None) -> dict:
+def recognize_single_invoice(image_url: str = None, image_data: str = None, session_id: str = None,
+                           api_key: str = None, base_url: str = None, model: str = None) -> dict:
     """
     识别单张发票图像
     
     Args:
         image_url: 图像的 URL
         image_data: base64 编码的图像数据
+        session_id: 会话ID，用于获取环境变量中的配置（向后兼容）
+        api_key: OpenAI API密钥
+        base_url: OpenAI API基础URL
+        model: OpenAI模型名称
     
     Returns:
         发票识别结果
@@ -83,8 +88,29 @@ def recognize_single_invoice(image_url: str = None, image_data: str = None) -> d
             }
         
         try:
-            # 调用原有的推理函数
-            im_show, invoice_fields = inference(tmp_file_path, 'ch')
+            # 获取OpenAI配置：优先使用直接传递的参数，其次从环境变量中获取（向后兼容）
+            if api_key and base_url and model:
+                # 使用直接传递的参数
+                pass
+            elif session_id:
+                # 从环境变量中获取OpenAI配置（向后兼容）
+                api_key = os.environ.get(f"OPENAI_API_KEY_{session_id}")
+                base_url = os.environ.get(f"OPENAI_BASE_URL_{session_id}")
+                model = os.environ.get(f"OPENAI_MODEL_{session_id}")
+                
+                if not api_key or not base_url or not model:
+                    return {
+                        "success": False,
+                        "message": f"Session {session_id} 缺少必要的OpenAI配置信息"
+                    }
+            else:
+                return {
+                    "success": False,
+                    "message": "缺少OpenAI配置信息，请提供api_key、base_url和model参数，或提供session_id"
+                }
+            
+            # 调用使用OpenAI API的推理函数
+            im_show, invoice_fields = inference(tmp_file_path, 'ch', api_key, base_url, model)
             
             # 返回结果
             return {
@@ -104,17 +130,43 @@ def recognize_single_invoice(image_url: str = None, image_data: str = None) -> d
         }
 
 @mcp.tool()
-def recognize_multiple_invoices(image_list: list) -> dict:
+def recognize_multiple_invoices(image_list: list, session_id: str = None,
+                              api_key: str = None, base_url: str = None, model: str = None) -> dict:
     """
     识别多张发票图像
     
     Args:
         image_list: base64 编码的图像数据列表或 URL 列表
+        session_id: 会话ID，用于获取环境变量中的配置（向后兼容）
+        api_key: OpenAI API密钥
+        base_url: OpenAI API基础URL
+        model: OpenAI模型名称
     
     Returns:
         多张发票识别结果
     """
     results = []
+    
+    # 获取OpenAI配置：优先使用直接传递的参数，其次从环境变量中获取（向后兼容）
+    if api_key and base_url and model:
+        # 使用直接传递的参数
+        pass
+    elif session_id:
+        # 从环境变量中获取OpenAI配置（向后兼容）
+        api_key = os.environ.get(f"OPENAI_API_KEY_{session_id}")
+        base_url = os.environ.get(f"OPENAI_BASE_URL_{session_id}")
+        model = os.environ.get(f"OPENAI_MODEL_{session_id}")
+        
+        if not api_key or not base_url or not model:
+            return {
+                "success": False,
+                "message": f"Session {session_id} 缺少必要的OpenAI配置信息"
+            }
+    else:
+        return {
+            "success": False,
+            "message": "缺少OpenAI配置信息，请提供api_key、base_url和model参数，或提供session_id"
+        }
     
     for i, image_item in enumerate(image_list):
         try:
@@ -132,14 +184,16 @@ def recognize_multiple_invoices(image_list: list) -> dict:
                         tmp_file.write(image_bytes)
                         tmp_file_path = tmp_file.name
             else:
-                return {
+                results.append({
+                    "index": i,
                     "success": False,
                     "message": "图像列表中的项目必须是字符串（base64 数据或 URL）"
-                }
+                })
+                continue
             
             try:
-                # 调用原有的推理函数
-                im_show, invoice_fields = inference(tmp_file_path, 'ch')
+                # 调用使用OpenAI API的推理函数
+                im_show, invoice_fields = inference(tmp_file_path, 'ch', api_key, base_url, model)
                 
                 # 添加结果
                 results.append({
@@ -166,9 +220,12 @@ def recognize_multiple_invoices(image_list: list) -> dict:
     }
 
 @mcp.tool()
-def get_invoice_template_info() -> dict:
+def get_invoice_template_info(session_id: str = None) -> dict:
     """
     获取支持的发票模板信息
+    
+    Args:
+        session_id: 会话ID，用于获取环境变量中的配置
     
     Returns:
         支持的发票模板信息

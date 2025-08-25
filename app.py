@@ -256,9 +256,66 @@ def test_and_store_client(api_key: str, base_url: str, model: str, session_id: s
         session_store[session_id]["client"] = client
         session_store[session_id]["model"] = model
         
+        # Save API credentials to environment variables with session_id
+        os.environ[f"OPENAI_API_KEY_{session_id}"] = api_key
+        os.environ[f"OPENAI_BASE_URL_{session_id}"] = base_url
+        os.environ[f"OPENAI_MODEL_{session_id}"] = model
+        os.environ[f"SESSION_ID"] = session_id
+        
         return "✅ 连接成功！API 配置有效。"
     except Exception as e:
         return f"❌ 连接失败: {str(e)}"
+
+def load_example_text():
+    """Load example invoice rules text"""
+    try:
+        example_path = os.path.join("examples", "invoice_rules.txt")
+        if os.path.exists(example_path):
+            with open(example_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+                
+                # 添加免责声明
+                disclaimer = """
+【免责声明】
+本示例文本仅供参考学习使用，不构成任何法律或财务建议。
+实际财务报销制度应根据公司具体情况、行业特点和当地法律法规进行定制。
+使用本示例前，请务必咨询专业的财务、法律顾问，并根据实际需求进行适当修改。
+对于因直接使用或参考本示例而产生的任何损失，开发者不承担任何责任。
+
+----------------------------------------
+"""
+                
+                return f"✅ 示例文本加载成功！\n\n{disclaimer}{content}"
+        else:
+            return "❌ 示例文件不存在：examples/invoice_rules.txt"
+    except Exception as e:
+        return f"❌ 加载示例文件失败: {str(e)}"
+
+
+def upload_example_document():
+    """Upload example document as a file object"""
+    try:
+        example_path = os.path.join("examples", "invoice_rules.txt")
+        if os.path.exists(example_path):
+            # Create a temporary file to return as a file-like object
+            import tempfile
+            temp_file = tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False, encoding='utf-8')
+            
+            # Read the example content and write to temp file
+            with open(example_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+                temp_file.write(content)
+            
+            temp_file.close()
+            
+            # Return the path of the temporary file
+            return temp_file.name
+        else:
+            return None
+    except Exception as e:
+        print(f"Error uploading example document: {e}")
+        return None
+
 
 def extract_reimbursement_rules_with_session(files, session_id: str):
     """Extract reimbursement rules from uploaded documents using session client"""
@@ -380,6 +437,20 @@ def answer_question_with_session(question, history, session_id: str, file_upload
         # Prepare messages for API call
         messages = []
         
+        # Create a default prompt that will be used if file processing fails or no file is uploaded
+        prompt = f"""
+        你是一个财务报销专家，请基于以下财务报销规则回答用户的问题。
+        
+        财务报销规则：
+        {rules_context}
+        
+        用户问题：{question}
+        
+        请提供准确、详细的回答，并引用相关的规则。
+        
+        会话ID: {session_id}
+        """
+        
         # Handle file upload if present
         if file_upload:
             # Run cleanup before processing new file
@@ -425,14 +496,14 @@ def answer_question_with_session(question, history, session_id: str, file_upload
                         # Add text content with PDF processing instructions
                         message_content.append({
                             "type": "text",
-                            "text": f"你是一个财务报销专家，请基于以下财务报销规则回答用户的问题，并处理上传的PDF文件。\n\n财务报销规则：\n{rules_context}\n\n用户问题：{question}\n\n请注意：用户已上传了一个PDF文件，文件内容如下：\n\n{pdf_text}\n\n如果PDF中包含发票信息，请使用 recognize_single_invoice 工具来识别发票信息。请将PDF中的发票内容完整提取出来。\n\n可用的文件访问方式：\n- 文件服务器URL: {file_server_url} (推荐)\n- 本地Gradio URL: {local_file_url}\n\n请使用 recognize_single_invoice 工具，该工具接受以下参数：\n- image_url: 图片的URL地址\n- image_data: base64编码的图片数据\n\n建议优先使用 image_url 参数，值为: {file_server_url}"
+                            "text": f"你是一个财务报销专家，请基于以下财务报销规则回答用户的问题，并处理上传的PDF文件。\n\n财务报销规则：\n{rules_context}\n\n用户问题：{question}\n\n请注意：用户已上传了一个PDF文件，文件内容如下：\n\n{pdf_text}\n\n如果PDF中包含发票信息，请使用 recognize_single_invoice 工具来识别发票信息。请将PDF中的发票内容完整提取出来。\n\n可用的文件访问方式：\n- 文件服务器URL: {file_server_url} (推荐)\n- 本地Gradio URL: {local_file_url}\n\n请使用 recognize_single_invoice 工具，该工具接受以下参数：\n- image_url: 图片的URL地址\n- image_data: base64编码的图片数据\n\n建议优先使用 image_url 参数，值为: {file_server_url}\n\n会话ID: {session_id}"
                         })
                         
                     except Exception as e:
                         logger.error(f"Error processing PDF: {e}")
                         message_content.append({
                             "type": "text",
-                            "text": f"你是一个财务报销专家，请基于以下财务报销规则回答用户的问题。\n\n财务报销规则：\n{rules_context}\n\n用户问题：{question}\n\n请注意：用户上传了一个PDF文件，但在处理文件时出错：{str(e)}"
+                            "text": f"你是一个财务报销专家，请基于以下财务报销规则回答用户的问题。\n\n财务报销规则：\n{rules_context}\n\n用户问题：{question}\n\n请注意：用户上传了一个PDF文件，但在处理文件时出错：{str(e)}\n\n会话ID: {session_id}"
                         })
                 else:
                     # Process image file
@@ -457,7 +528,7 @@ def answer_question_with_session(question, history, session_id: str, file_upload
                     # Add text content with image processing instructions
                     message_content.append({
                         "type": "text",
-                        "text": f"你是一个财务报销专家，请基于以下财务报销规则回答用户的问题，并处理上传的图片。\n\n财务报销规则：\n{rules_context}\n\n用户问题：{question}\n\n请注意：用户已上传了一张图片，请使用 recognize_single_invoice 工具来识别图片中的发票信息。请将图片中的发票内容完整提取出来。\n\n可用的图片访问方式：\n- 文件服务器URL: {file_server_url} (推荐)\n- 本地Gradio URL: {local_file_url}\n- Base64数据: 已准备好\n\n请使用 recognize_single_invoice 工具，该工具接受以下参数：\n- image_url: 图片的URL地址\n- image_data: base64编码的图片数据\n\n建议优先使用 image_url 参数，值为: {file_server_url}"
+                        "text": f"你是一个财务报销专家，请基于以下财务报销规则回答用户的问题，并处理上传的图片。\n\n财务报销规则：\n{rules_context}\n\n用户问题：{question}\n\n请注意：用户已上传了一张图片，请使用 recognize_single_invoice 工具来识别图片中的发票信息。请将图片中的发票内容完整提取出来。\n\n可用的图片访问方式：\n- 文件服务器URL: {file_server_url} (推荐)\n- 本地Gradio URL: {local_file_url}\n- Base64数据: 已准备好\n\n请使用 recognize_single_invoice 工具，该工具接受以下参数：\n- image_url: 图片的URL地址\n- image_data: base64编码的图片数据\n\n建议优先使用 image_url 参数，值为: {file_server_url}\n\n会话ID: {session_id}"
                     })
                     
                     # Add image content
@@ -482,6 +553,8 @@ def answer_question_with_session(question, history, session_id: str, file_upload
                 用户问题：{question}
                 
                 请提供准确、详细的回答，并引用相关的规则。
+                
+                会话ID: {session_id}
                 """
                 messages.append({"role": "user", "content": prompt})
         else:
@@ -495,6 +568,8 @@ def answer_question_with_session(question, history, session_id: str, file_upload
             用户问题：{question}
             
             请提供准确、详细的回答，并引用相关的规则。
+            
+            会话ID: {session_id}
             """
             messages.append({"role": "user", "content": prompt})
         
@@ -541,6 +616,26 @@ def answer_question_with_session(question, history, session_id: str, file_upload
                     if tool_name == "recognize_single_invoice":
                         logger.info(f"处理发票识别工具参数: {tool_args}")
                         
+                        # Add session_id to the tool arguments
+                        tool_args["session_id"] = session_id
+                        logger.info(f"添加会话ID: {session_id}")
+                        
+                        # Get OpenAI configuration from session
+                        session_data = session_store.get(session_id, {})
+                        if session_data:
+                            # Add OpenAI configuration directly to tool arguments
+                            if "client" in session_data and "model" in session_data:
+                                # Try to get API key and base URL from environment variables
+                                api_key = os.environ.get(f"OPENAI_API_KEY_{session_id}")
+                                base_url = os.environ.get(f"OPENAI_BASE_URL_{session_id}")
+                                model = os.environ.get(f"OPENAI_MODEL_{session_id}")
+                                
+                                if api_key and base_url and model:
+                                    tool_args["api_key"] = api_key
+                                    tool_args["base_url"] = base_url
+                                    tool_args["model"] = model
+                                    logger.info("已添加OpenAI配置参数到工具调用")
+                        
                         # Check if there's an image_url parameter
                         if "image_url" in tool_args:
                             image_url = tool_args["image_url"]
@@ -572,12 +667,21 @@ def answer_question_with_session(question, history, session_id: str, file_upload
                                 # Already a file server URL, no conversion needed
                                 logger.info(f"使用文件服务器URL: {image_url}")
                         
-                        # Ensure only OCR tool supported parameters are passed (image_url and image_data)
+                        # Ensure only OCR tool supported parameters are passed
                         valid_args = {}
                         if "image_url" in tool_args:
                             valid_args["image_url"] = tool_args["image_url"]
                         if "image_data" in tool_args:
                             valid_args["image_data"] = tool_args["image_data"]
+                        # Always include session_id for invoice recognition tool
+                        valid_args["session_id"] = session_id
+                        # Include OpenAI configuration if available
+                        if "api_key" in tool_args:
+                            valid_args["api_key"] = tool_args["api_key"]
+                        if "base_url" in tool_args:
+                            valid_args["base_url"] = tool_args["base_url"]
+                        if "model" in tool_args:
+                            valid_args["model"] = tool_args["model"]
                         
                         tool_args = valid_args
                         logger.info(f"最终传递给OCR工具的参数: {list(tool_args.keys())}")
@@ -855,7 +959,20 @@ class AuditAgentApp:
                     file_count="multiple"
                 )
                 
+                # 将处理文档按钮放在上传控件下面
                 process_docs_btn = gr.Button("处理文档", variant="primary")
+                
+                # 添加示例文本显示区域，自动加载
+                example_content = load_example_text()
+                example_text = gr.Textbox(
+                    label="示例文本内容（内置财务报销规则）",
+                    lines=10,
+                    value=example_content,
+                    interactive=False
+                )
+                
+                # 在示例文本下方添加上传示例文档按钮
+                upload_example_btn = gr.Button("上传示例文档", variant="secondary")
                 
                 rules_output = gr.JSON(
                     label="提取的财务报销规则"
@@ -870,6 +987,92 @@ class AuditAgentApp:
         process_docs_btn.click(
             fn=extract_reimbursement_rules_with_session,
             inputs=[file_upload, session_id],
+            outputs=[processing_status, rules_output]
+        )
+        
+        # Set up event handler for uploading example document
+        def process_example_document(session_id):
+            """Process example document directly"""
+            try:
+                example_path = os.path.join("examples", "invoice_rules.txt")
+                if os.path.exists(example_path):
+                    # Read the example file content
+                    with open(example_path, 'r', encoding='utf-8') as f:
+                        content = f.read()
+                    
+                    # Create a mock file object for processing
+                    class MockFile:
+                        def __init__(self, name, content):
+                            self.name = name
+                            self.content = content
+                        
+                        def read(self):
+                            return self.content.encode('utf-8')
+                    
+                    mock_file = MockFile("invoice_rules.txt", content)
+                    
+                    # Process the example file directly
+                    session_data = session_store.get(session_id, {})
+                    client = session_data.get("client")
+                    model = session_data.get("model")
+                    
+                    if not client or not model:
+                        return "❌ 请先在 Step 1 中配置并测试 OpenAI API 连接", []
+                    
+                    # Process the file content
+                    document_text = content
+                    
+                    # Create prompt for rule extraction
+                    prompt = f"""
+                    请从以下文档内容中提取所有关于财务报销的规则，并以JSON格式返回。
+                    返回格式应该是一个规则列表，每个规则包含以下字段：
+                    - rule_name: 规则名称
+                    - rule_description: 规则描述
+                    - rule_category: 规则类别（如：差旅费、办公用品、业务招待等）
+                    
+                    文档内容：
+                    {document_text}
+                    """
+                    
+                    response = client.chat.completions.create(
+                        model=model,
+                        messages=[{"role": "user", "content": prompt}],
+                        temperature=0.3,
+                        extra_body={
+                            "enable_thinking": False
+                        }
+                    )
+                    
+                    # Parse the response to extract rules
+                    rules_text = response.choices[0].message.content
+                    
+                    # Try to parse as JSON, if fails, return as text
+                    try:
+                        # Extract JSON from the response if it's wrapped in markdown code blocks
+                        if "```json" in rules_text:
+                            json_start = rules_text.find("```json") + 7
+                            json_end = rules_text.find("```", json_start)
+                            rules_json = rules_text[json_start:json_end].strip()
+                            rules = json.loads(rules_json)
+                        else:
+                            rules = json.loads(rules_text)
+                        
+                        # Store rules in session
+                        session_store[session_id]["reimbursement_rules"] = rules
+                        return "✅ 示例文档处理成功！", rules
+                    except json.JSONDecodeError:
+                        # If JSON parsing fails, return the raw text
+                        return "⚠️ 规则已提取，但JSON解析失败，请查看原始文本", rules_text
+                    
+                else:
+                    return "❌ 示例文件不存在：examples/invoice_rules.txt", []
+                    
+            except Exception as e:
+                return f"❌ 处理示例文档失败: {str(e)}", []
+        
+        upload_example_btn.click(
+            fn=process_example_document,
+            inputs=[session_id],
             outputs=[processing_status, rules_output]
         )
     
