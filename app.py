@@ -91,6 +91,39 @@ def start_file_server(port=8889):
     server_thread.start()
     return f"http://localhost:{port}"
 
+def start_mcp_servers():
+    """启动MCP服务器"""
+    import subprocess
+    import time
+    
+    # 启动城市分级服务器
+    try:
+        city_server_process = subprocess.Popen(
+            ["python", "mcp_citytier_stdio.py"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True
+        )
+        logger.info(f"城市分级服务器已启动，PID: {city_server_process.pid}")
+        time.sleep(2)  # 等待服务器启动
+    except Exception as e:
+        logger.error(f"启动城市分级服务器失败: {e}")
+    
+    # 启动发票识别服务器
+    try:
+        invoice_server_process = subprocess.Popen(
+            ["python", "mcp_invoice_stdio.py"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True
+        )
+        logger.info(f"发票识别服务器已启动，PID: {invoice_server_process.pid}")
+        time.sleep(2)  # 等待服务器启动
+    except Exception as e:
+        logger.error(f"启动发票识别服务器失败: {e}")
+    
+    return city_server_process, invoice_server_process
+
 class FastMCPStdioClientWrapper:
     def __init__(self):
         self.sessions: Dict[str, Client] = {}  # 存储多个服务器连接
@@ -679,6 +712,9 @@ def load_example_invoice():
 
 def connect_city_server_with_session(command, session_id: str):
     """Connect to city tier MCP server"""
+    import subprocess
+    import time
+    
     session_data = session_store.get(session_id, {})
     mcp_client = session_data.get("mcp_client")
     
@@ -686,14 +722,43 @@ def connect_city_server_with_session(command, session_id: str):
         return "❌ MCP客户端未初始化"
     
     try:
+        # 首先检查是否已经连接到服务器
+        if "citytier_server" in mcp_client.connected_servers:
+            return "✅ 城市分级服务器已连接"
+        
+        # 如果未连接，尝试连接
         command_list = command.split()
         result = mcp_client.connect(command_list, "citytier_server")
+        
+        # 如果连接失败，尝试启动服务器
+        if "❌" in result:
+            logger.info("城市分级服务器连接失败，尝试启动服务器...")
+            try:
+                # 启动服务器
+                server_process = subprocess.Popen(
+                    command_list,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True
+                )
+                logger.info(f"城市分级服务器已启动，PID: {server_process.pid}")
+                time.sleep(3)  # 等待服务器启动
+                
+                # 再次尝试连接
+                result = mcp_client.connect(command_list, "citytier_server")
+            except Exception as start_e:
+                logger.error(f"启动城市分级服务器失败: {start_e}")
+                return f"❌ 连接和启动城市分级服务器都失败: {str(e)}; 启动失败: {str(start_e)}"
+        
         return result
     except Exception as e:
         return f"❌ 连接城市分级服务器失败: {str(e)}"
 
 def connect_invoice_server_with_session(command, session_id: str):
     """Connect to invoice OCR MCP server"""
+    import subprocess
+    import time
+    
     session_data = session_store.get(session_id, {})
     mcp_client = session_data.get("mcp_client")
     
@@ -701,13 +766,37 @@ def connect_invoice_server_with_session(command, session_id: str):
         return "❌ MCP客户端未初始化"
     
     try:
-        # Substitute parameters from Step 1
-        substituted_command = substitute_command_parameters(command, session_id)
-        command_list = substituted_command.split()
+        # 首先检查是否已经连接到服务器
+        if "invoice_server" in mcp_client.connected_servers:
+            return "✅ 发票识别服务器已连接"
+        
+        # 如果未连接，尝试连接
+        command_list = command.split()
         result = mcp_client.connect(command_list, "invoice_server")
+        
+        # 如果连接失败，尝试启动服务器
+        if "❌" in result:
+            logger.info("发票识别服务器连接失败，尝试启动服务器...")
+            try:
+                # 启动服务器
+                server_process = subprocess.Popen(
+                    command_list,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True
+                )
+                logger.info(f"发票识别服务器已启动，PID: {server_process.pid}")
+                time.sleep(3)  # 等待服务器启动
+                
+                # 再次尝试连接
+                result = mcp_client.connect(command_list, "invoice_server")
+            except Exception as start_e:
+                logger.error(f"启动发票识别服务器失败: {start_e}")
+                return f"❌ 连接和启动发票识别服务器都失败: {str(e)}; 启动失败: {str(start_e)}"
+        
         return result
     except Exception as e:
-        return f"❌ 连接发票识别LLM服务器失败: {str(e)}"
+        return f"❌ 连接发票识别服务器失败: {str(e)}"
 
 def test_city_server_with_session(command, session_id: str):
     """Test connection to city tier MCP server"""
@@ -718,6 +807,11 @@ def test_city_server_with_session(command, session_id: str):
         return "❌ MCP客户端未初始化"
     
     try:
+        # 首先检查是否已经连接到服务器
+        if "citytier_server" in mcp_client.connected_servers:
+            return "✅ 城市分级服务器已连接"
+        
+        # 如果未连接，尝试测试连接
         command_list = command.split()
         result = mcp_client.test_connection(command_list, "citytier_server")
         return result
@@ -733,40 +827,16 @@ def test_invoice_server_with_session(command, session_id: str):
         return "❌ MCP客户端未初始化"
     
     try:
-        # Substitute parameters from Step 1
-        substituted_command = substitute_command_parameters(command, session_id)
-        command_list = substituted_command.split()
+        # 首先检查是否已经连接到服务器
+        if "invoice_server" in mcp_client.connected_servers:
+            return "✅ 发票识别服务器已连接"
+        
+        # 如果未连接，尝试测试连接
+        command_list = command.split()
         result = mcp_client.test_connection(command_list, "invoice_server")
         return result
     except Exception as e:
         return f"❌ 测试发票识别LLM服务器连接失败: {str(e)}"
-
-def substitute_command_parameters(command, session_id: str):
-    """Substitute parameters in command with values from Step 1"""
-    session_data = session_store.get(session_id, {})
-    
-    # Get parameters from session
-    model = session_data.get("model", "")
-    client = session_data.get("client")
-    
-    # Extract API key and base URL from client if available
-    api_key = ""
-    base_url = ""
-    if client and hasattr(client, 'api_key'):
-        api_key = client.api_key
-    if client and hasattr(client, 'base_url'):
-        base_url = str(client.base_url)  # Ensure base_url is converted to string
-    
-    # Substitute parameters in command
-    substituted_command = command
-    if "$model_name" in substituted_command and model:
-        substituted_command = substituted_command.replace("$model_name", model)
-    if "$api_key" in substituted_command and api_key:
-        substituted_command = substituted_command.replace("$api_key", api_key)
-    if "$base_url" in substituted_command and base_url:
-        substituted_command = substituted_command.replace("$base_url", base_url)
-    
-    return substituted_command
 
 def get_mcp_server_status(session_id: str):
     """Get the status of connected MCP servers"""
@@ -936,8 +1006,8 @@ class AuditAgentApp:
                     
                 invoice_server_command = gr.Textbox(
                     label="服务器命令",
-                    placeholder="python mcp_invoice_stdio.py -- --model_name $model_name --api_key $api_key --base_url $base_url",
-                    value="python mcp_invoice_stdio.py -- --model_name $model_name --api_key $api_key --base_url $base_url"
+                    placeholder="python mcp_invoice_stdio.py",
+                    value="python mcp_invoice_stdio.py"
                 )
                     
                 with gr.Row():
@@ -1049,6 +1119,11 @@ if __name__ == "__main__":
     # Start file server
     file_server_base_url = start_file_server(8889)
     logger.info(f"文件服务器已启动: {file_server_base_url}")
+    
+    # Start MCP servers
+    logger.info("正在启动MCP服务器...")
+    city_server_process, invoice_server_process = start_mcp_servers()
+    logger.info("MCP服务器启动完成")
     
     app = AuditAgentApp()
     app.launch()
