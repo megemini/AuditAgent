@@ -409,180 +409,151 @@ def extract_reimbursement_rules_with_session(files, session_id: str):
         return f"❌ 处理失败: {str(e)}", []
 
 def answer_question_with_session(question, history, session_id: str, file_upload=None):
-    """Answer user's question based on reimbursement rules using session client"""
+    """Answer user's question based on reimbursement rules using session client with multi-tool support"""
     if not question.strip():
         return "", history
-    
+
     session_data = session_store.get(session_id, {})
     client = session_data.get("client")
     model = session_data.get("model")
     reimbursement_rules = session_data.get("reimbursement_rules", [])
     mcp_client = global_mcp_client
-    
+
     if not reimbursement_rules:
         response = "❌ 请先在 Step 2 中上传文档并提取财务报销规则。"
         history.append({"role": "user", "content": question})
         history.append({"role": "assistant", "content": response})
         return "", history
-    
+
     if not client or not model:
         response = "❌ 请先在 Step 1 中配置 OpenAI API 设置。"
         history.append({"role": "user", "content": question})
         history.append({"role": "assistant", "content": response})
         return "", history
-    
+
     try:
-        # Create context with rules
-        rules_context = json.dumps(reimbursement_rules, ensure_ascii=False, indent=2)
-        
-        # Prepare messages for API call
-        messages = []
-        
-        # Create a default prompt that will be used if file processing fails or no file is uploaded
-        prompt = f"""
-        你是一个财务报销专家，请基于以下财务报销规则回答用户的问题。
-        
-        财务报销规则：
-        {rules_context}
-        
-        用户问题：{question}
-        
-        请提供准确、详细的回答，并引用相关的规则。
-        
-        会话ID: {session_id}
-        """
-        
-        # Handle file upload if present
-        if file_upload:
-            # Run cleanup before processing new file
-            cleanup_upload_files()
-            
-            message_content = []
-            
-            # Process the uploaded file
-            try:
-                # Generate unique filename
-                unique_filename = f"{uuid.uuid4()}_{os.path.basename(file_upload.name)}"
-                
-                # Ensure upload_files directory exists
-                upload_dir = os.path.join(os.getcwd(), "upload_files")
-                os.makedirs(upload_dir, exist_ok=True)
-                
-                # Save file to upload_files directory
-                saved_file_path = os.path.join(upload_dir, unique_filename)
-                
-                # Copy uploaded file to upload_files directory
-                shutil.copy2(file_upload.name, saved_file_path)
-                
-                # Generate accessible URL for OCR server
-                file_server_url = f"http://localhost:8889/{unique_filename}"
-                
-                # Also generate local URL as backup
-                local_file_url = f"http://localhost:7861/upload_files/{unique_filename}"
-                
-                # Check file type and process accordingly
-                file_ext = os.path.splitext(file_upload.name)[1].lower()
-                
-                if file_ext == '.pdf':
-                    # Process PDF file
-                    pdf_text = ""
-                    try:
-                        # Extract text from PDF using PyMuPDF
-                        pdf_document = fitz.open(saved_file_path)
-                        for page_num in range(len(pdf_document)):
-                            page = pdf_document.load_page(page_num)
-                            pdf_text += page.get_text() + "\n"
-                        pdf_document.close()
-                        
-                        # Add text content with PDF processing instructions
-                        message_content.append({
-                            "type": "text",
-                            "text": f"你是一个财务报销专家，请基于以下财务报销规则回答用户的问题，并处理上传的PDF文件。\n\n财务报销规则：\n{rules_context}\n\n用户问题：{question}\n\n请注意：用户已上传了一个PDF文件，文件内容如下：\n\n{pdf_text}\n\n如果PDF中包含发票信息，请使用 recognize_single_invoice 工具来识别发票信息。请将PDF中的发票内容完整提取出来。\n\n可用的文件访问方式：\n- 文件服务器URL: {file_server_url} (推荐)\n- 本地Gradio URL: {local_file_url}\n\n请使用 recognize_single_invoice 工具，该工具接受以下参数：\n- image_url: 图片的URL地址\n- image_data: base64编码的图片数据\n\n建议优先使用 image_url 参数，值为: {file_server_url}\n\n会话ID: {session_id}"
-                        })
-                        
-                    except Exception as e:
-                        logger.error(f"Error processing PDF: {e}")
-                        message_content.append({
-                            "type": "text",
-                            "text": f"你是一个财务报销专家，请基于以下财务报销规则回答用户的问题。\n\n财务报销规则：\n{rules_context}\n\n用户问题：{question}\n\n请注意：用户上传了一个PDF文件，但在处理文件时出错：{str(e)}\n\n会话ID: {session_id}"
-                        })
-                else:
-                    # Process image file
-                    # Read image file and convert to base64
-                    with open(saved_file_path, "rb") as img_file:
-                        img_data = img_file.read()
-                        img_base64 = base64.b64encode(img_data).decode('utf-8')
-                    
-                    # Get MIME type for image
-                    mime_type = {
-                        '.jpg': 'image/jpeg',
-                        '.jpeg': 'image/jpeg',
-                        '.png': 'image/png',
-                        '.gif': 'image/gif',
-                        '.bmp': 'image/bmp',
-                        '.webp': 'image/webp'
-                    }.get(file_ext, 'image/jpeg')
-                    
-                    # Create data URL
-                    data_url = f"data:{mime_type};base64,{img_base64}"
-                    
-                    # Add text content with image processing instructions
-                    message_content.append({
-                        "type": "text",
-                        "text": f"你是一个财务报销专家，请基于以下财务报销规则回答用户的问题，并处理上传的图片。\n\n财务报销规则：\n{rules_context}\n\n用户问题：{question}\n\n请注意：用户已上传了一张图片，请使用 recognize_single_invoice 工具来识别图片中的发票信息。请将图片中的发票内容完整提取出来。\n\n可用的图片访问方式：\n- 文件服务器URL: {file_server_url} (推荐)\n- 本地Gradio URL: {local_file_url}\n- Base64数据: 已准备好\n\n请使用 recognize_single_invoice 工具，该工具接受以下参数：\n- image_url: 图片的URL地址\n- image_data: base64编码的图片数据\n\n建议优先使用 image_url 参数，值为: {file_server_url}\n\n会话ID: {session_id}"
-                    })
-                    
-                    # Add image content
-                    message_content.append({
-                        "type": "image_url",
-                        "image_url": {
-                            "url": data_url
-                        }
-                    })
-                
-                messages.append({"role": "user", "content": message_content})
-                
-            except Exception as e:
-                logger.error(f"Error processing file: {e}")
-                # Fall back to text-only if file processing fails
-                prompt = f"""
-                你是一个财务报销专家，请基于以下财务报销规则回答用户的问题。
-                
-                财务报销规则：
-                {rules_context}
-                
-                用户问题：{question}
-                
-                请提供准确、详细的回答，并引用相关的规则。
-                
-                会话ID: {session_id}
-                """
-                messages.append({"role": "user", "content": prompt})
-        else:
-            # No image, use standard text prompt
-            prompt = f"""
-            你是一个财务报销专家，请基于以下财务报销规则回答用户的问题。
-            
-            财务报销规则：
-            {rules_context}
-            
-            用户问题：{question}
-            
-            请提供准确、详细的回答，并引用相关的规则。
-            
-            会话ID: {session_id}
+        # Process the query with multi-tool support
+        new_messages = loop.run_until_complete(
+            _process_query_with_tools(question, history, session_id, file_upload, client, model, reimbursement_rules, mcp_client)
+        )
+        return "", history + [{"role": "user", "content": question}] + new_messages
+
+    except Exception as e:
+        error_response = f"❌ 回答问题时出错: {str(e)}"
+        history.append({"role": "user", "content": question})
+        history.append({"role": "assistant", "content": error_response})
+        return "", history
+
+
+async def _process_query_with_tools(question, history, session_id: str, file_upload, client, model, reimbursement_rules, mcp_client):
+    """Process query with multi-tool calling support"""
+    # Create context with rules
+    rules_context = json.dumps(reimbursement_rules, ensure_ascii=False, indent=2)
+
+    # Build conversation messages from history
+    claude_messages = []
+    for msg in history:
+        if isinstance(msg, dict):
+            role, content = msg.get("role"), msg.get("content")
+            if role in ["user", "assistant", "system"] and content:
+                claude_messages.append({"role": role, "content": content})
+
+    # Prepare the main prompt with detailed audit instructions
+    base_prompt = f"""
+    你是一个财务报销专家，请基于以下财务报销规则对用户的问题进行详细分析和审核。
+
+    财务报销规则：
+    {rules_context}
+
+    用户问题：{question}
+
+    **重要：如果用户上传了发票或要求审核发票，请按以下步骤进行完整的审核流程：**
+
+    1. **发票识别阶段**：
+       - 首先使用 recognize_single_invoice 工具识别发票信息
+       - 提取发票的关键信息：金额、日期、城市、类型等
+
+    2. **规则验证阶段**：
+       - 针对每条相关的财务报销规则，逐一进行验证
+       - 根据需要调用相应的工具：
+         * 如果涉及时间限制，使用 get_current_time 工具获取当前时间进行对比
+         * 如果涉及城市分级标准，使用 query_city_tier 工具查询城市分级
+         * 如果需要批量查询城市，使用 query_multiple_cities 工具
+         * 如果需要获取某个分级的所有城市，使用 get_cities_by_tier 工具
+
+    3. **综合分析阶段**：
+       - 汇总所有验证结果
+       - 给出明确的审核结论：通过/不通过
+       - 列出不符合规则的具体项目
+       - 提供改进建议
+
+    **注意**：
+    - 必须逐条验证所有相关规则，不能跳过任何步骤
+    - 每个验证步骤都要使用相应的工具获取准确信息
+    - 最终给出详细的审核报告
+
+    可用的MCP工具：
+    - recognize_single_invoice: 识别发票信息
+    - get_current_time: 获取当前时间
+    - query_city_tier: 查询单个城市分级
+    - query_multiple_cities: 批量查询多个城市分级
+    - get_cities_by_tier: 获取指定分级的所有城市
+
+    会话ID: {session_id}
+    """
+
+    # Handle file upload and create the main message
+    main_message = await _prepare_main_message(question, file_upload, session_id, rules_context, base_prompt)
+    claude_messages.append(main_message)
+
+    # Get MCP tools if available
+    mcp_tools = []
+    if mcp_client and mcp_client.connected_servers:
+        mcp_tools = mcp_client.get_all_tools()
+
+    # Process with multi-tool calling
+    result_messages = []
+    max_iterations = 8  # Increase iterations for multi-step audit process
+    iteration = 0
+    invoice_recognized = False  # Track if invoice has been recognized
+
+    while iteration < max_iterations:
+        iteration += 1
+
+        # Prepare additional context for continuing audit process
+        additional_context = ""
+        if invoice_recognized and iteration > 1:
+            additional_context = f"""
+
+            **继续审核流程**：
+            发票信息已识别完成。现在请继续进行第{iteration}步：逐条验证财务报销规则。
+
+            请检查以下方面（根据需要调用相应工具）：
+            1. 时间限制验证 - 使用 get_current_time 工具检查报销是否超时
+            2. 城市分级验证 - 使用 query_city_tier 工具检查城市分级标准
+            3. 金额标准验证 - 根据城市分级和规则检查金额是否符合标准
+            4. 其他规则验证 - 逐一检查所有相关规则
+
+            **重要**：必须调用相应的工具来获取准确信息进行验证，不能仅凭推测。
             """
-            messages.append({"role": "user", "content": prompt})
-        
-        # Get MCP tools if available
-        mcp_tools = []
-        if mcp_client and mcp_client.connected_servers:
-            mcp_tools = mcp_client.get_all_tools()
-        
+
         # Make the API call with or without tools
+        current_messages = claude_messages.copy()
+        if additional_context and len(current_messages) > 0:
+            # Add continuation prompt to the last user message
+            last_message = current_messages[-1]
+            if last_message["role"] == "user":
+                if isinstance(last_message["content"], str):
+                    last_message["content"] += additional_context
+                elif isinstance(last_message["content"], list):
+                    last_message["content"].append({
+                        "type": "text",
+                        "text": additional_context
+                    })
+
         response = client.chat.completions.create(
             model=model,
-            messages=messages,
+            messages=current_messages,
             temperature=0.3,
             tools=mcp_tools if mcp_tools else None,
             tool_choice="auto" if mcp_tools else None,
@@ -590,191 +561,324 @@ def answer_question_with_session(question, history, session_id: str, file_upload
                 "enable_thinking": False
             }
         )
-        
+
         assistant_msg = response.choices[0].message
-        
-        # If there are tool calls, handle them
+
+        # Add assistant response to messages
+        if assistant_msg.content:
+            result_messages.append({
+                "role": "assistant",
+                "content": assistant_msg.content
+            })
+
+        # Check if there are tool calls
         if assistant_msg.tool_calls and mcp_client:
-            # Add the initial response to history
-            history.append({"role": "user", "content": question})
-            history.append({"role": "assistant", "content": assistant_msg.content or ""})
-            
-            # Process each tool call
+            # Process all tool calls in this iteration
+            tool_results = []
+
             for call in assistant_msg.tool_calls:
                 tool_name = call.function.name
                 tool_args = json.loads(call.function.arguments)
-                
-                # Add tool call message to history
-                history.append({
+
+                # Track if invoice recognition tool was called
+                if tool_name == "recognize_single_invoice":
+                    invoice_recognized = True
+
+                # Add tool call message to result
+                result_messages.append({
                     "role": "assistant",
                     "content": f"使用工具: {tool_name}",
-                    "metadata": {"title": f"Tool: {tool_name}", "status": "pending"}
+                    "metadata": {
+                        "title": f"Tool: {tool_name}",
+                        "log": f"参数: {json.dumps(tool_args, ensure_ascii=False)}",
+                        "status": "pending",
+                        "id": f"tool_call_{tool_name}_{iteration}"
+                    }
                 })
-                
+
                 # Execute the tool
                 try:
-                    # Special handling for invoice recognition tool
-                    if tool_name == "recognize_single_invoice":
-                        logger.info(f"处理发票识别工具参数: {tool_args}")
-                        
-                        # Add session_id to the tool arguments
-                        tool_args["session_id"] = session_id
-                        logger.info(f"添加会话ID: {session_id}")
-                        
-                        # Get OpenAI configuration from session
-                        session_data = session_store.get(session_id, {})
-                        if session_data:
-                            # Add OpenAI configuration directly to tool arguments
-                            if "client" in session_data and "model" in session_data:
-                                # Try to get API key and base URL from environment variables
-                                api_key = os.environ.get(f"OPENAI_API_KEY_{session_id}")
-                                base_url = os.environ.get(f"OPENAI_BASE_URL_{session_id}")
-                                model = os.environ.get(f"OPENAI_MODEL_{session_id}")
-                                
-                                if api_key and base_url and model:
-                                    tool_args["api_key"] = api_key
-                                    tool_args["base_url"] = base_url
-                                    tool_args["model"] = model
-                                    logger.info("已添加OpenAI配置参数到工具调用")
-                        
-                        # Check if there's an image_url parameter
-                        if "image_url" in tool_args:
-                            image_url = tool_args["image_url"]
-                            logger.info(f"处理图片URL: {image_url}")
-                            
-                            # If it's a local URL, try to convert to an accessible URL
-                            if image_url.startswith("http://localhost:7861/upload_files/"):
-                                filename = image_url.split("/")[-1]
-                                local_file_path = os.path.join(os.getcwd(), "upload_files", filename)
-                                
-                                if os.path.exists(local_file_path):
-                                    # Use file server URL to ensure OCR server can access it
-                                    file_server_url = f"http://localhost:8889/{filename}"
-                                    tool_args["image_url"] = file_server_url
-                                    logger.info(f"更新图片URL为文件服务器URL: {file_server_url}")
-                                    
-                                    # Also provide base64 data as backup (OCR tool supports this parameter)
-                                    try:
-                                        with open(local_file_path, "rb") as img_file:
-                                            img_data = img_file.read()
-                                            img_base64 = base64.b64encode(img_data).decode('utf-8')
-                                            tool_args["image_data"] = img_base64
-                                            logger.info("已添加base64图片数据作为备用")
-                                    except Exception as e:
-                                        logger.warning(f"无法生成base64数据: {e}")
-                                else:
-                                    logger.error(f"本地文件不存在: {local_file_path}")
-                            elif image_url.startswith("http://localhost:8889/"):
-                                # Already a file server URL, no conversion needed
-                                logger.info(f"使用文件服务器URL: {image_url}")
-                        
-                        # Ensure only OCR tool supported parameters are passed
-                        valid_args = {}
-                        if "image_url" in tool_args:
-                            valid_args["image_url"] = tool_args["image_url"]
-                        if "image_data" in tool_args:
-                            valid_args["image_data"] = tool_args["image_data"]
-                        # Always include session_id for invoice recognition tool
-                        valid_args["session_id"] = session_id
-                        # Include OpenAI configuration if available
-                        if "api_key" in tool_args:
-                            valid_args["api_key"] = tool_args["api_key"]
-                        if "base_url" in tool_args:
-                            valid_args["base_url"] = tool_args["base_url"]
-                        if "model" in tool_args:
-                            valid_args["model"] = tool_args["model"]
-                        
-                        tool_args = valid_args
-                        logger.info(f"最终传递给OCR工具的参数: {list(tool_args.keys())}")
-                    
-                    # Get the target server for the tool
-                    target_server = mcp_client.get_server_for_tool(tool_name)
-                    if target_server and target_server in mcp_client.sessions:
-                        tool_result = loop.run_until_complete(
-                            mcp_client.sessions[target_server].call_tool(tool_name, tool_args)
-                        )
-                        
-                        # Process tool result
-                        if hasattr(tool_result, 'content'):
-                            result_content = tool_result.content
-                        elif isinstance(tool_result, dict):
-                            result_content = tool_result
-                        else:
-                            result_content = str(tool_result)
-                        
-                        # Add tool result to history
-                        history.append({
-                            "role": "assistant",
-                            "content": f"工具结果: {tool_name}",
-                            "metadata": {"title": f"Result: {tool_name}", "status": "done"}
-                        })
-                        
-                        if isinstance(result_content, dict):
-                            result_content = json.dumps(result_content, ensure_ascii=False, indent=2)
-                        elif isinstance(result_content, list):
-                            result_content = "\n".join(map(str, result_content))
-                        
-                        history.append({
-                            "role": "assistant",
-                            "content": f"```\n{result_content}\n```",
-                            "metadata": {"title": "Raw Output"}
-                        })
-                        
-                        # Make a follow-up call to the LLM with the tool results
-                        follow_up_messages = [
-                            {"role": "user", "content": prompt},
-                            {"role": "assistant", "content": assistant_msg.content or "", "tool_calls": [
-                                {
-                                    "id": call.id,
-                                    "type": "function",
-                                    "function": {"name": tool_name, "arguments": call.function.arguments}
-                                }
-                            ]},
-                            {"role": "tool", "tool_call_id": call.id, "content": str(result_content)}
-                        ]
-                        
-                        follow_response = client.chat.completions.create(
-                            model=model,
-                            messages=follow_up_messages,
-                            temperature=0.3,
-                            extra_body={
-                                "enable_thinking": False
-                            }
-                        )
-                        
-                        # Add the final response to history
-                        if follow_response.choices[0].message.content:
-                            history.append({
-                                "role": "assistant",
-                                "content": follow_response.choices[0].message.content
-                            })
-                        
-                    else:
-                        history.append({
-                            "role": "assistant",
-                            "content": f"❌ 工具 '{tool_name}' 未找到对应的服务器连接"
-                        })
-                        
-                except Exception as e:
-                    history.append({
+                    tool_result = await _execute_tool(tool_name, tool_args, session_id, mcp_client)
+                    tool_results.append((call.id, tool_name, tool_result))
+
+                    # Add tool result to result messages
+                    result_messages.append({
                         "role": "assistant",
-                        "content": f"❌ 执行工具 '{tool_name}' 时出错: {str(e)}"
+                        "content": f"工具结果: {tool_name}",
+                        "metadata": {
+                            "title": f"Result: {tool_name}",
+                            "status": "done",
+                            "id": f"result_{tool_name}_{iteration}"
+                        }
                     })
-            
-            return "", history
+
+                    # Format and add the actual result
+                    if isinstance(tool_result, dict):
+                        formatted_result = json.dumps(tool_result, ensure_ascii=False, indent=2)
+                    elif isinstance(tool_result, list):
+                        formatted_result = "\n".join(map(str, tool_result))
+                    else:
+                        formatted_result = str(tool_result)
+
+                    result_messages.append({
+                        "role": "assistant",
+                        "content": f"```\n{formatted_result}\n```",
+                        "metadata": {"title": "Raw Output"}
+                    })
+
+                except Exception as e:
+                    error_msg = f"❌ 执行工具 '{tool_name}' 时出错: {str(e)}"
+                    result_messages.append({
+                        "role": "assistant",
+                        "content": error_msg
+                    })
+                    tool_results.append((call.id, tool_name, error_msg))
+
+            # Add tool calls and results to conversation history
+            claude_messages.append({
+                "role": "assistant",
+                "content": assistant_msg.content or "",
+                "tool_calls": [
+                    {
+                        "id": call.id,
+                        "type": "function",
+                        "function": {"name": call.function.name, "arguments": call.function.arguments}
+                    } for call in assistant_msg.tool_calls
+                ]
+            })
+
+            # Add tool results to conversation
+            for call_id, tool_name, tool_result in tool_results:
+                claude_messages.append({
+                    "role": "tool",
+                    "tool_call_id": call_id,
+                    "content": str(tool_result)
+                })
+
+            # Continue the loop to allow for more tool calls
+            continue
         else:
-            # No tool calls, just return the response
-            answer = assistant_msg.content
-            history.append({"role": "user", "content": question})
-            history.append({"role": "assistant", "content": answer})
-            
-            return "", history
-        
+            # No more tool calls
+            # If invoice was recognized but we haven't done rule validation, prompt for it
+            if invoice_recognized and iteration <= 3:
+                # Add a follow-up prompt to encourage rule validation
+                follow_up_prompt = """
+                请继续完成审核流程。现在需要逐条验证财务报销规则：
+
+                1. 检查报销时间是否超时（使用 get_current_time 工具）
+                2. 检查城市分级标准（使用 query_city_tier 工具）
+                3. 验证金额是否符合标准
+                4. 检查其他相关规则
+
+                请调用相应的工具来获取准确信息进行验证。
+                """
+
+                claude_messages.append({
+                    "role": "user",
+                    "content": follow_up_prompt
+                })
+                continue
+            else:
+                # Really no more tool calls, break the loop
+                break
+
+    return result_messages
+
+
+async def _prepare_main_message(question, file_upload, session_id: str, rules_context: str, base_prompt: str):
+    """Prepare the main message with file upload handling"""
+    if file_upload:
+        # Run cleanup before processing new file
+        cleanup_upload_files()
+
+        message_content = []
+
+        try:
+            # Generate unique filename
+            unique_filename = f"{uuid.uuid4()}_{os.path.basename(file_upload.name)}"
+
+            # Ensure upload_files directory exists
+            upload_dir = os.path.join(os.getcwd(), "upload_files")
+            os.makedirs(upload_dir, exist_ok=True)
+
+            # Save file to upload_files directory
+            saved_file_path = os.path.join(upload_dir, unique_filename)
+
+            # Copy uploaded file to upload_files directory
+            shutil.copy2(file_upload.name, saved_file_path)
+
+            # Generate accessible URL for OCR server
+            file_server_url = f"http://localhost:8889/{unique_filename}"
+
+            # Also generate local URL as backup
+            local_file_url = f"http://localhost:7861/upload_files/{unique_filename}"
+
+            # Check file type and process accordingly
+            file_ext = os.path.splitext(file_upload.name)[1].lower()
+
+            if file_ext == '.pdf':
+                # Process PDF file
+                pdf_text = ""
+                try:
+                    # Extract text from PDF using PyMuPDF
+                    pdf_document = fitz.open(saved_file_path)
+                    for page_num in range(len(pdf_document)):
+                        page = pdf_document.load_page(page_num)
+                        pdf_text += page.get_text() + "\n"
+                    pdf_document.close()
+
+                    # Add text content with PDF processing instructions
+                    message_content.append({
+                        "type": "text",
+                        "text": f"{base_prompt}\n\n请注意：用户已上传了一个PDF文件，文件内容如下：\n\n{pdf_text}\n\n如果PDF中包含发票信息，请使用 recognize_single_invoice 工具来识别发票信息。请将PDF中的发票内容完整提取出来。\n\n可用的文件访问方式：\n- 文件服务器URL: {file_server_url} (推荐)\n- 本地Gradio URL: {local_file_url}\n\n请使用 recognize_single_invoice 工具，该工具接受以下参数：\n- image_url: 图片的URL地址\n- image_data: base64编码的图片数据\n\n建议优先使用 image_url 参数，值为: {file_server_url}"
+                    })
+
+                except Exception as e:
+                    logger.error(f"Error processing PDF: {e}")
+                    message_content.append({
+                        "type": "text",
+                        "text": f"{base_prompt}\n\n请注意：用户上传了一个PDF文件，但在处理文件时出错：{str(e)}"
+                    })
+            else:
+                # Process image file
+                # Read image file and convert to base64
+                with open(saved_file_path, "rb") as img_file:
+                    img_data = img_file.read()
+                    img_base64 = base64.b64encode(img_data).decode('utf-8')
+
+                # Get MIME type for image
+                mime_type = {
+                    '.jpg': 'image/jpeg',
+                    '.jpeg': 'image/jpeg',
+                    '.png': 'image/png',
+                    '.gif': 'image/gif',
+                    '.bmp': 'image/bmp',
+                    '.webp': 'image/webp'
+                }.get(file_ext, 'image/jpeg')
+
+                # Create data URL
+                data_url = f"data:{mime_type};base64,{img_base64}"
+
+                # Add text content with image processing instructions
+                message_content.append({
+                    "type": "text",
+                    "text": f"{base_prompt}\n\n请注意：用户已上传了一张图片，请使用 recognize_single_invoice 工具来识别图片中的发票信息。请将图片中的发票内容完整提取出来。\n\n可用的图片访问方式：\n- 文件服务器URL: {file_server_url} (推荐)\n- 本地Gradio URL: {local_file_url}\n- Base64数据: 已准备好\n\n请使用 recognize_single_invoice 工具，该工具接受以下参数：\n- image_url: 图片的URL地址\n- image_data: base64编码的图片数据\n\n建议优先使用 image_url 参数，值为: {file_server_url}"
+                })
+
+                # Add image content
+                message_content.append({
+                    "type": "image_url",
+                    "image_url": {
+                        "url": data_url
+                    }
+                })
+
+            return {"role": "user", "content": message_content}
+
+        except Exception as e:
+            logger.error(f"Error processing file: {e}")
+            # Fall back to text-only if file processing fails
+            return {"role": "user", "content": base_prompt}
+    else:
+        # No file upload, use standard text prompt
+        return {"role": "user", "content": base_prompt}
+
+
+async def _execute_tool(tool_name: str, tool_args: dict, session_id: str, mcp_client):
+    """Execute a single tool and return the result"""
+    try:
+        # Special handling for invoice recognition tool
+        if tool_name == "recognize_single_invoice":
+            logger.info(f"处理发票识别工具参数: {tool_args}")
+
+            # Add session_id to the tool arguments
+            tool_args["session_id"] = session_id
+            logger.info(f"添加会话ID: {session_id}")
+
+            # Get OpenAI configuration from session
+            session_data = session_store.get(session_id, {})
+            if session_data:
+                # Add OpenAI configuration directly to tool arguments
+                if "client" in session_data and "model" in session_data:
+                    # Try to get API key and base URL from environment variables
+                    api_key = os.environ.get(f"OPENAI_API_KEY_{session_id}")
+                    base_url = os.environ.get(f"OPENAI_BASE_URL_{session_id}")
+                    model = os.environ.get(f"OPENAI_MODEL_{session_id}")
+
+                    if api_key and base_url and model:
+                        tool_args["api_key"] = api_key
+                        tool_args["base_url"] = base_url
+                        tool_args["model"] = model
+                        logger.info("已添加OpenAI配置参数到工具调用")
+
+            # Check if there's an image_url parameter
+            if "image_url" in tool_args:
+                image_url = tool_args["image_url"]
+                logger.info(f"处理图片URL: {image_url}")
+
+                # If it's a local URL, try to convert to an accessible URL
+                if image_url.startswith("http://localhost:7861/upload_files/"):
+                    filename = image_url.split("/")[-1]
+                    local_file_path = os.path.join(os.getcwd(), "upload_files", filename)
+
+                    if os.path.exists(local_file_path):
+                        # Use file server URL to ensure OCR server can access it
+                        file_server_url = f"http://localhost:8889/{filename}"
+                        tool_args["image_url"] = file_server_url
+                        logger.info(f"更新图片URL为文件服务器URL: {file_server_url}")
+
+                        # Also provide base64 data as backup (OCR tool supports this parameter)
+                        try:
+                            with open(local_file_path, "rb") as img_file:
+                                img_data = img_file.read()
+                                img_base64 = base64.b64encode(img_data).decode('utf-8')
+                                tool_args["image_data"] = img_base64
+                                logger.info("已添加base64图片数据作为备用")
+                        except Exception as e:
+                            logger.warning(f"无法生成base64数据: {e}")
+                    else:
+                        logger.error(f"本地文件不存在: {local_file_path}")
+                elif image_url.startswith("http://localhost:8889/"):
+                    # Already a file server URL, no conversion needed
+                    logger.info(f"使用文件服务器URL: {image_url}")
+
+            # Ensure only OCR tool supported parameters are passed
+            valid_args = {}
+            if "image_url" in tool_args:
+                valid_args["image_url"] = tool_args["image_url"]
+            if "image_data" in tool_args:
+                valid_args["image_data"] = tool_args["image_data"]
+            # Always include session_id for invoice recognition tool
+            valid_args["session_id"] = session_id
+            # Include OpenAI configuration if available
+            if "api_key" in tool_args:
+                valid_args["api_key"] = tool_args["api_key"]
+            if "base_url" in tool_args:
+                valid_args["base_url"] = tool_args["base_url"]
+            if "model" in tool_args:
+                valid_args["model"] = tool_args["model"]
+
+            tool_args = valid_args
+            logger.info(f"最终传递给OCR工具的参数: {list(tool_args.keys())}")
+
+        # Get the target server for the tool
+        target_server = mcp_client.get_server_for_tool(tool_name)
+        if target_server and target_server in mcp_client.sessions:
+            tool_result = await mcp_client.sessions[target_server].call_tool(tool_name, tool_args)
+
+            # Process tool result
+            if hasattr(tool_result, 'content'):
+                return tool_result.content
+            elif isinstance(tool_result, dict):
+                return tool_result
+            else:
+                return str(tool_result)
+        else:
+            return f"❌ 工具 '{tool_name}' 未找到对应的服务器连接"
+
     except Exception as e:
-        error_response = f"❌ 回答问题时出错: {str(e)}"
-        history.append({"role": "user", "content": question})
-        history.append({"role": "assistant", "content": error_response})
-        return "", history
+        logger.error(f"Error executing tool {tool_name}: {e}")
+        return f"❌ 执行工具 '{tool_name}' 时出错: {str(e)}"
 
 def clear_chat_history(history):
     """Clear chat history"""
