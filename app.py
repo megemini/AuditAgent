@@ -1129,7 +1129,7 @@ async def _prepare_main_message(question, file_upload, session_id: str, rules_co
             # 使用公共函数获取主机名
             host = get_server_host()
             
-            file_server_url = f"http://{host}:8889/{unique_filename}"
+            file_server_url = f"http://{host}:8889/upload_files/{unique_filename}"
 
             # Also generate local URL as backup
             local_file_url = f"http://{host}:7861/upload_files/{unique_filename}"
@@ -1247,7 +1247,7 @@ async def _execute_tool(tool_name: str, tool_args: dict, session_id: str, mcp_cl
                         # 使用公共函数获取主机名
                         host = get_server_host()
                         
-                        file_server_url = f"http://{host}:8889/{filename}"
+                        file_server_url = f"http://{host}:8889/upload_files/{filename}"
                         tool_args["image_url"] = file_server_url
                         logger.info(f"更新图片URL为文件服务器URL: {file_server_url}")
 
