@@ -1,7 +1,7 @@
 [project]
 name = "auditagent"
 version = "0.1.0"
-description = "Add your description here"
+description = "The Financial Reimbursement Intelligent Agent is an AI-powered assistant based on large language models, designed to help enterprise employees quickly understand financial reimbursement policies, audit reimbursement materials, and improve reimbursement efficiency."
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = []
