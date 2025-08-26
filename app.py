@@ -465,13 +465,15 @@ async def _process_query_with_tools_streaming(question, history, session_id: str
     # Create context with rules
     rules_context = json.dumps(reimbursement_rules, ensure_ascii=False, indent=2)
 
-    # Build conversation messages from history (excluding the user question we just added)
+    # Build conversation messages from history (including all previous messages)
     claude_messages = []
-    for msg in history[:-1]:  # Exclude the last message (user question)
+    for msg in history:  # Include all history messages
         if isinstance(msg, dict):
             role, content = msg.get("role"), msg.get("content")
             if role in ["user", "assistant", "system"] and content:
-                claude_messages.append({"role": role, "content": content})
+                # Skip metadata-only messages to keep conversation clean
+                if not (role == "assistant" and ("🤔 AI正在思考" in content or "🔧 使用工具:" in content)):
+                    claude_messages.append({"role": role, "content": content})
 
     # Prepare the main prompt with step-by-step audit instructions
     base_prompt = f"""
@@ -531,9 +533,17 @@ async def _process_query_with_tools_streaming(question, history, session_id: str
     会话ID: {session_id}
     """
 
-    # Handle file upload and create the main message
-    main_message = await _prepare_main_message(question, file_upload, session_id, rules_context, base_prompt)
-    claude_messages.append(main_message)
+    # Only add the main message if this is the first question (not a follow-up)
+    # Check if we already have conversation history
+    has_previous_conversation = len(claude_messages) > 1
+
+    if not has_previous_conversation:
+        # This is the first question, add the main message with full context
+        main_message = await _prepare_main_message(question, file_upload, session_id, rules_context, base_prompt)
+        claude_messages.append(main_message)
+    else:
+        # This is a follow-up question, just add the user question without repeating the full context
+        claude_messages.append({"role": "user", "content": question})
 
     # Get MCP tools if available
     mcp_tools = []
@@ -545,6 +555,7 @@ async def _process_query_with_tools_streaming(question, history, session_id: str
     max_iterations = 8  # Increase iterations for multi-step audit process
     iteration = 0
     invoice_recognized = False  # Track if invoice has been recognized
+    rules_validation_started = False  # Track if rules validation has started
 
     while iteration < max_iterations:
         iteration += 1
@@ -562,58 +573,8 @@ async def _process_query_with_tools_streaming(question, history, session_id: str
         current_history.append(thinking_msg)
         yield current_history
 
-        # Prepare additional context for continuing audit process
-        additional_context = ""
-        if invoice_recognized and iteration > 1:
-            # Count total rules for step-by-step audit
-            total_rules = len(reimbursement_rules)
-            remaining_rules = max(0, total_rules - (iteration - 2))  # Estimate remaining rules
-
-            additional_context = f"""
-
-            **继续逐条验证流程 - 第{iteration}轮**：
-            发票信息已识别完成。现在请继续逐条验证财务报销规则。
-
-            **当前进度**：总共{total_rules}条规则，还需要验证剩余规则
-
-            **逐条验证要求**：
-            🔄 **一次只验证一条规则** - 不要批量处理多条规则
-            🛠️ **按需调用工具** - 只有当验证某条规则需要额外信息时，才调用工具
-            📝 **即时给出结果** - 每验证完一条规则，立即说明该规则的验证结果
-            ➡️ **然后继续下一条** - 验证完一条后，继续验证下一条规则
-
-            **验证流程示例**：
-            ```
-            现在验证规则X：[规则名称]
-            → 分析规则要求：[说明这条规则的具体要求]
-            → 检查发票信息：[基于已识别的发票信息进行检查]
-            → [如果需要额外信息] 调用工具：[说明为什么需要调用工具]
-            → 验证结果：✅符合 / ❌不符合 / ⚠️需注意
-            → 详细说明：[具体的验证过程和结果]
-
-            接下来验证规则Y：[下一条规则名称]
-            → ...
-            ```
-
-            **重要**：
-            - 不要一次性调用多个工具
-            - 每条规则验证完成后，立即给出该规则的结果
-            - 只有在所有规则都验证完成后，才生成最终汇总报告
-            """
-
         # Make the API call with or without tools
         current_messages = claude_messages.copy()
-        if additional_context and len(current_messages) > 0:
-            # Add continuation prompt to the last user message
-            last_message = current_messages[-1]
-            if last_message["role"] == "user":
-                if isinstance(last_message["content"], str):
-                    last_message["content"] += additional_context
-                elif isinstance(last_message["content"], list):
-                    last_message["content"].append({
-                        "type": "text",
-                        "text": additional_context
-                    })
 
         response = client.chat.completions.create(
             model=model,
@@ -745,48 +706,62 @@ async def _process_query_with_tools_streaming(question, history, session_id: str
             continue
         else:
             # No more tool calls
-            # If invoice was recognized but we haven't done step-by-step rule validation, prompt for it
-            if invoice_recognized and iteration <= 6:  # Increase iterations for step-by-step audit
-                # Count total rules for step-by-step audit
-                total_rules = len(reimbursement_rules)
+            # Check if we need to continue with rule validation based on content analysis
+            if invoice_recognized and _should_continue_audit(claude_messages, reimbursement_rules, iteration):
+                # Check if we have completed rule validation by looking at the conversation
+                conversation_text = " ".join([msg.get("content", "") for msg in claude_messages[-3:] if isinstance(msg.get("content"), str)])
 
-                # Add a follow-up prompt to encourage step-by-step rule validation
-                follow_up_prompt = f"""
-                **请开始逐条验证规则！**
+                # Check if we have a comprehensive audit report
+                has_final_report = any(keyword in conversation_text.lower() for keyword in [
+                    "最终审核报告", "审核统计", "最终结论", "改进建议", "总规则数"
+                ])
 
-                发票信息已识别完成。现在需要逐条验证所有{total_rules}条财务报销规则。
+                # Check if we have validated multiple rules
+                rule_validations = sum(1 for i in range(1, len(reimbursement_rules) + 1)
+                                     if f"规则{i}" in conversation_text)
 
-                **逐条验证流程**：
+                # If we don't have a final report and haven't validated enough rules, continue
+                if not has_final_report and rule_validations < len(reimbursement_rules):
+                    total_rules = len(reimbursement_rules)
 
-                **第一条规则验证**：
-                1. 选择第一条规则：[规则名称]
-                2. 分析规则要求：[说明这条规则的具体要求]
-                3. 检查发票信息：[基于已识别的发票信息进行检查]
-                4. 如果需要额外信息，调用相应工具（如 get_current_time 或 query_city_tier）
-                5. 给出验证结果：✅符合 / ❌不符合 / ⚠️需注意
-                6. 详细说明验证过程和结果
+                    # Determine what to prompt based on current state
+                    if not rules_validation_started:
+                        # First time prompting for rule validation
+                        rules_validation_started = True
+                        follow_up_prompt = f"""
+                        **请开始逐条验证规则！**
 
-                **然后继续第二条规则验证**：
-                重复上述步骤...
+                        发票信息已识别完成。现在需要逐条验证所有{total_rules}条财务报销规则。
 
-                **重要要求**：
-                🔄 一次只验证一条规则，不要批量处理
-                🛠️ 只有当验证某条规则需要额外信息时，才调用工具
-                📝 每验证完一条规则，立即给出该规则的结果
-                ➡️ 然后继续验证下一条规则
-                🎯 所有规则验证完成后，再生成最终汇总报告
+                        **逐条验证要求**：
+                        🔄 一次只验证一条规则，不要批量处理
+                        🛠️ 只有当验证某条规则需要额外信息时，才调用工具
+                        📝 每验证完一条规则，立即给出该规则的结果
+                        ➡️ 然后继续验证下一条规则
+                        🎯 所有规则验证完成后，再生成最终汇总报告
 
-                请现在开始验证第一条规则！
-                """
+                        请现在开始验证第一条规则！
+                        """
+                    else:
+                        # Continue with remaining rule validation
+                        follow_up_prompt = f"""
+                        **请继续验证剩余规则！**
 
-                claude_messages.append({
-                    "role": "user",
-                    "content": follow_up_prompt
-                })
-                continue
-            else:
-                # Really no more tool calls, break the loop
-                break
+                        您已经验证了一些规则，但还需要继续验证剩余的规则。
+                        总共有{total_rules}条规则需要验证。
+
+                        请继续逐条验证剩余的规则，每条规则验证完成后立即给出结果。
+                        最后生成完整的审核报告汇总。
+                        """
+
+                    claude_messages.append({
+                        "role": "user",
+                        "content": follow_up_prompt
+                    })
+                    continue
+
+            # Really no more tool calls and validation seems complete, break the loop
+            break
 
 async def _process_query_with_tools(question, history, session_id: str, file_upload, client, model, reimbursement_rules, mcp_client):
     """Process query with multi-tool calling support"""
@@ -1026,6 +1001,78 @@ async def _process_query_with_tools(question, history, session_id: str, file_upl
                 break
 
     return result_messages
+
+
+def _should_continue_audit(claude_messages, reimbursement_rules, iteration):
+    """
+    智能判断是否应该继续审核流程
+    基于对话内容、规则验证进度和迭代次数综合判断
+    """
+    # 安全上限：防止无限循环
+    if iteration > 8:  # 降低上限，更早停止
+        return False
+
+    # 获取完整的对话内容（不只是最近5条）
+    full_conversation = " ".join([
+        msg.get("content", "") for msg in claude_messages
+        if isinstance(msg.get("content"), str)
+    ])
+
+    # 检查是否有最终审核报告的标志
+    final_report_indicators = [
+        "最终审核报告", "审核统计", "最终结论", "改进建议",
+        "总规则数", "符合规则", "不符合规则", "审核完成",
+        "📋 发票审核报告", "📊 规则验证结果", "📈 审核统计"
+    ]
+    has_final_report = any(indicator in full_conversation for indicator in final_report_indicators)
+
+    # 检查规则验证进度（在完整对话中查找）
+    total_rules = len(reimbursement_rules)
+    completed_rules = 0
+
+    # 更精确的规则完成检测
+    for i in range(1, total_rules + 1):
+        rule_pattern = f"规则{i}"
+        if rule_pattern in full_conversation:
+            # 检查该规则是否有明确的验证结果
+            rule_section = full_conversation[full_conversation.find(rule_pattern):]
+            if any(result in rule_section[:200] for result in ["✅ 符合", "❌ 不符合", "⚠️ 需注意"]):
+                completed_rules += 1
+
+    # 检查是否有重复审核的迹象
+    rule_mentions = sum(full_conversation.count(f"规则{i}") for i in range(1, total_rules + 1))
+    if rule_mentions > total_rules * 2:  # 如果规则被提及次数过多，可能在重复
+        return False
+
+    # 检查对话长度
+    if len(full_conversation) > 3000:  # 对话过长，停止
+        return False
+
+    print(f"🔍 审核进度检查: 完成规则 {completed_rules}/{total_rules}, 有最终报告: {has_final_report}, 迭代: {iteration}")
+
+    # 更严格的判断逻辑：
+    # 1. 如果有最终报告，立即停止
+    if has_final_report:
+        return False
+
+    # 2. 如果所有规则都已验证完成，停止
+    if completed_rules >= total_rules:
+        return False
+
+    # 3. 如果迭代次数过多，停止
+    if iteration > 5:
+        return False
+
+    # 4. 如果是早期阶段且还有规则未完成，继续
+    if iteration <= 3 and completed_rules < total_rules:
+        return True
+
+    # 5. 如果有部分进度但未完成，谨慎继续
+    if completed_rules > 0 and completed_rules < total_rules and iteration <= 4:
+        return True
+
+    # 6. 其他情况，停止审核
+    return False
 
 
 async def _prepare_main_message(question, file_upload, session_id: str, rules_context: str, base_prompt: str):
