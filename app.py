@@ -411,7 +411,7 @@ def extract_reimbursement_rules_with_session(files, session_id: str):
 def answer_question_with_session(question, history, session_id: str, file_upload=None):
     """Answer user's question with streaming output support"""
     if not question.strip():
-        yield "", history
+        yield "", history, None  # Return None for file_upload to clear it
 
     session_data = session_store.get(session_id, {})
     client = session_data.get("client")
@@ -421,18 +421,18 @@ def answer_question_with_session(question, history, session_id: str, file_upload
 
     # Add user question to history first
     history = history + [{"role": "user", "content": question}]
-    yield "", history
+    yield "", history, None  # Return None for file_upload to clear it after sending
 
     if not reimbursement_rules:
         response = "❌ 请先在 Step 2 中上传文档并提取财务报销规则。"
         history.append({"role": "assistant", "content": response})
-        yield "", history
+        yield "", history, None
         return
 
     if not client or not model:
         response = "❌ 请先在 Step 1 中配置 OpenAI API 设置。"
         history.append({"role": "assistant", "content": response})
-        yield "", history
+        yield "", history, None
         return
 
     try:
@@ -448,14 +448,16 @@ def answer_question_with_session(question, history, session_id: str, file_upload
         while True:
             try:
                 result = loop.run_until_complete(async_gen.__anext__())
-                yield result
+                # result is already a tuple with (empty_string, updated_history)
+                # add None for file_upload clearing
+                yield result[0], result[1], None
             except StopAsyncIteration:
                 break
 
     except Exception as e:
         error_response = f"❌ 回答问题时出错: {str(e)}"
         history.append({"role": "assistant", "content": error_response})
-        yield "", history
+        yield "", history, None
 
 
 async def _process_query_with_tools_streaming(question, history, session_id: str, file_upload, client, model, reimbursement_rules, mcp_client):
@@ -471,7 +473,7 @@ async def _process_query_with_tools_streaming(question, history, session_id: str
             if role in ["user", "assistant", "system"] and content:
                 claude_messages.append({"role": role, "content": content})
 
-    # Prepare the main prompt with detailed audit instructions
+    # Prepare the main prompt with step-by-step audit instructions
     base_prompt = f"""
     你是一个财务报销专家，请基于以下财务报销规则对用户的问题进行详细分析和审核。
 
@@ -480,35 +482,49 @@ async def _process_query_with_tools_streaming(question, history, session_id: str
 
     用户问题：{question}
 
-    **重要：如果用户上传了发票或要求审核发票，请按以下步骤进行完整的审核流程：**
+    **重要：如果用户上传了发票或要求审核发票，请按以下步骤进行逐条验证的审核流程：**
 
-    1. **发票识别阶段**：
-       - 首先使用 recognize_single_invoice 工具识别发票信息
-       - 提取发票的关键信息：金额、日期、城市、类型等
+    **第一步：发票识别**
+    - 使用 recognize_single_invoice 工具识别发票信息
+    - 提取发票的关键信息：金额、日期、城市、类型等
 
-    2. **规则验证阶段**：
-       - 针对每条相关的财务报销规则，逐一进行验证
-       - 根据需要调用相应的工具：
-         * 如果涉及时间限制，使用 get_current_time 工具获取当前时间进行对比
-         * 如果涉及城市分级标准，使用 query_city_tier 工具查询城市分级
-         * 如果需要批量查询城市，使用 query_multiple_cities 工具
-         * 如果需要获取某个分级的所有城市，使用 get_cities_by_tier 工具
+    **第二步：逐条规则验证**
+    - **一次只验证一条规则，按顺序进行**
+    - **每条规则验证时，如果需要额外信息，就调用相应的MCP工具**
+    - **验证完一条规则后，立即给出该规则的验证结果**
+    - **然后继续验证下一条规则**
 
-    3. **综合分析阶段**：
-       - 汇总所有验证结果
-       - 给出明确的审核结论：通过/不通过
-       - 列出不符合规则的具体项目
-       - 提供改进建议
+    **验证流程示例**：
+    ```
+    正在验证规则1：[规则名称]
+    → 需要获取当前时间 → 调用 get_current_time 工具
+    → 验证结果：✅ 符合 / ❌ 不符合 / ⚠️ 需注意
+    → 详细说明：[具体验证过程和结果]
 
-    **注意**：
-    - 必须逐条验证所有相关规则，不能跳过任何步骤
-    - 每个验证步骤都要使用相应的工具获取准确信息
-    - 最终给出详细的审核报告
+    正在验证规则2：[规则名称]
+    → 需要查询城市分级 → 调用 query_city_tier 工具
+    → 验证结果：✅ 符合 / ❌ 不符合 / ⚠️ 需注意
+    → 详细说明：[具体验证过程和结果]
 
-    可用的MCP工具：
+    ... 继续验证其他规则
+    ```
+
+    **第三步：汇总审核结果**
+    - 只有在所有规则都验证完成后，才生成最终的审核报告
+    - 统计所有规则的验证结果
+    - 给出最终结论和改进建议
+
+    **重要原则**：
+    - 🔄 **逐条进行**：一次只验证一条规则，不要批量处理
+    - 🛠️ **按需调用工具**：只有当验证某条规则需要额外信息时，才调用相应工具
+    - 📝 **即时反馈**：每验证完一条规则，立即给出该规则的结果
+    - 🎯 **最后汇总**：所有规则验证完成后，再生成最终的审核报告
+    - ✅ **不中断流程**：即使某条规则不符合，也要继续验证其他规则
+
+    **可用的MCP工具**（按需调用）：
     - recognize_single_invoice: 识别发票信息
-    - get_current_time: 获取当前时间
-    - query_city_tier: 查询单个城市分级
+    - get_current_time: 获取当前时间（用于时间相关规则验证）
+    - query_city_tier: 查询单个城市分级（用于城市标准相关规则验证）
     - query_multiple_cities: 批量查询多个城市分级
     - get_cities_by_tier: 获取指定分级的所有城市
 
@@ -549,18 +565,40 @@ async def _process_query_with_tools_streaming(question, history, session_id: str
         # Prepare additional context for continuing audit process
         additional_context = ""
         if invoice_recognized and iteration > 1:
+            # Count total rules for step-by-step audit
+            total_rules = len(reimbursement_rules)
+            remaining_rules = max(0, total_rules - (iteration - 2))  # Estimate remaining rules
+
             additional_context = f"""
 
-            **继续审核流程**：
-            发票信息已识别完成。现在请继续进行第{iteration}步：逐条验证财务报销规则。
+            **继续逐条验证流程 - 第{iteration}轮**：
+            发票信息已识别完成。现在请继续逐条验证财务报销规则。
 
-            请检查以下方面（根据需要调用相应工具）：
-            1. 时间限制验证 - 使用 get_current_time 工具检查报销是否超时
-            2. 城市分级验证 - 使用 query_city_tier 工具检查城市分级标准
-            3. 金额标准验证 - 根据城市分级和规则检查金额是否符合标准
-            4. 其他规则验证 - 逐一检查所有相关规则
+            **当前进度**：总共{total_rules}条规则，还需要验证剩余规则
 
-            **重要**：必须调用相应的工具来获取准确信息进行验证，不能仅凭推测。
+            **逐条验证要求**：
+            🔄 **一次只验证一条规则** - 不要批量处理多条规则
+            🛠️ **按需调用工具** - 只有当验证某条规则需要额外信息时，才调用工具
+            📝 **即时给出结果** - 每验证完一条规则，立即说明该规则的验证结果
+            ➡️ **然后继续下一条** - 验证完一条后，继续验证下一条规则
+
+            **验证流程示例**：
+            ```
+            现在验证规则X：[规则名称]
+            → 分析规则要求：[说明这条规则的具体要求]
+            → 检查发票信息：[基于已识别的发票信息进行检查]
+            → [如果需要额外信息] 调用工具：[说明为什么需要调用工具]
+            → 验证结果：✅符合 / ❌不符合 / ⚠️需注意
+            → 详细说明：[具体的验证过程和结果]
+
+            接下来验证规则Y：[下一条规则名称]
+            → ...
+            ```
+
+            **重要**：
+            - 不要一次性调用多个工具
+            - 每条规则验证完成后，立即给出该规则的结果
+            - 只有在所有规则都验证完成后，才生成最终汇总报告
             """
 
         # Make the API call with or without tools
@@ -707,18 +745,38 @@ async def _process_query_with_tools_streaming(question, history, session_id: str
             continue
         else:
             # No more tool calls
-            # If invoice was recognized but we haven't done rule validation, prompt for it
-            if invoice_recognized and iteration <= 3:
-                # Add a follow-up prompt to encourage rule validation
-                follow_up_prompt = """
-                请继续完成审核流程。现在需要逐条验证财务报销规则：
+            # If invoice was recognized but we haven't done step-by-step rule validation, prompt for it
+            if invoice_recognized and iteration <= 6:  # Increase iterations for step-by-step audit
+                # Count total rules for step-by-step audit
+                total_rules = len(reimbursement_rules)
 
-                1. 检查报销时间是否超时（使用 get_current_time 工具）
-                2. 检查城市分级标准（使用 query_city_tier 工具）
-                3. 验证金额是否符合标准
-                4. 检查其他相关规则
+                # Add a follow-up prompt to encourage step-by-step rule validation
+                follow_up_prompt = f"""
+                **请开始逐条验证规则！**
 
-                请调用相应的工具来获取准确信息进行验证。
+                发票信息已识别完成。现在需要逐条验证所有{total_rules}条财务报销规则。
+
+                **逐条验证流程**：
+
+                **第一条规则验证**：
+                1. 选择第一条规则：[规则名称]
+                2. 分析规则要求：[说明这条规则的具体要求]
+                3. 检查发票信息：[基于已识别的发票信息进行检查]
+                4. 如果需要额外信息，调用相应工具（如 get_current_time 或 query_city_tier）
+                5. 给出验证结果：✅符合 / ❌不符合 / ⚠️需注意
+                6. 详细说明验证过程和结果
+
+                **然后继续第二条规则验证**：
+                重复上述步骤...
+
+                **重要要求**：
+                🔄 一次只验证一条规则，不要批量处理
+                🛠️ 只有当验证某条规则需要额外信息时，才调用工具
+                📝 每验证完一条规则，立即给出该规则的结果
+                ➡️ 然后继续验证下一条规则
+                🎯 所有规则验证完成后，再生成最终汇总报告
+
+                请现在开始验证第一条规则！
                 """
 
                 claude_messages.append({
@@ -1711,6 +1769,15 @@ class AuditAgentApp:
     
     def setup_agent_tab(self, session_id):
         with gr.Row():
+            with gr.Column(scale=2):
+                gr.Markdown("## 对话记录")
+                
+                chatbot = gr.Chatbot(
+                    label="对话记录",
+                    height=800,
+                    type="messages"
+                )
+            
             with gr.Column(scale=1):
                 gr.Markdown("## 智能问答")
                 
@@ -1740,21 +1807,12 @@ class AuditAgentApp:
                     height=200
                 )
                 gr.Markdown("*免责声明：此示例发票图片仅用于演示目的，图片来源于网络。*")
-            
-            with gr.Column(scale=2):
-                gr.Markdown("## 对话记录")
-                
-                chatbot = gr.Chatbot(
-                    label="对话记录",
-                    height=500,
-                    type="messages"
-                )
         
         # Set up event handlers for chat functionality with streaming
         ask_btn.click(
             fn=answer_question_with_session,
             inputs=[question_input, chatbot, session_id, file_upload],
-            outputs=[question_input, chatbot],
+            outputs=[question_input, chatbot, file_upload],  # Add file_upload to outputs to clear it
             show_progress="full"  # Show progress for streaming
         )
         

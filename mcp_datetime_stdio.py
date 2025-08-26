@@ -44,18 +44,26 @@ def get_current_time() -> dict:
     获取当前时间
     
     Returns:
-        当前时间信息
+        当前时间信息（包含日期和时间）
     """
     try:
         now = datetime.now()
         return {
             "success": True,
+            "datetime": now.isoformat(),
+            "date": now.date().isoformat(),
             "time": now.time().isoformat(),
+            "year": now.year,
+            "month": now.month,
+            "day": now.day,
             "hour": now.hour,
             "minute": now.minute,
             "second": now.second,
             "microsecond": now.microsecond,
-            "message": f"当前时间: {now.strftime('%H时%M分%S秒')}"
+            "weekday": now.weekday(),
+            "weekday_name": now.strftime("%A"),
+            "formatted": now.strftime('%Y年%m月%d日 %H时%M分%S秒'),
+            "message": f"当前日期时间: {now.strftime('%Y年%m月%d日 %H时%M分%S秒')}"
         }
     except Exception as e:
         return {
