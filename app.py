@@ -409,9 +409,9 @@ def extract_reimbursement_rules_with_session(files, session_id: str):
         return f"❌ 处理失败: {str(e)}", []
 
 def answer_question_with_session(question, history, session_id: str, file_upload=None):
-    """Answer user's question based on reimbursement rules using session client with multi-tool support"""
+    """Answer user's question with streaming output support"""
     if not question.strip():
-        return "", history
+        yield "", history
 
     session_data = session_store.get(session_id, {})
     client = session_data.get("client")
@@ -419,31 +419,289 @@ def answer_question_with_session(question, history, session_id: str, file_upload
     reimbursement_rules = session_data.get("reimbursement_rules", [])
     mcp_client = global_mcp_client
 
+    # Add user question to history first
+    history = history + [{"role": "user", "content": question}]
+    yield "", history
+
     if not reimbursement_rules:
         response = "❌ 请先在 Step 2 中上传文档并提取财务报销规则。"
-        history.append({"role": "user", "content": question})
         history.append({"role": "assistant", "content": response})
-        return "", history
+        yield "", history
+        return
 
     if not client or not model:
         response = "❌ 请先在 Step 1 中配置 OpenAI API 设置。"
-        history.append({"role": "user", "content": question})
         history.append({"role": "assistant", "content": response})
-        return "", history
+        yield "", history
+        return
 
     try:
-        # Process the query with multi-tool support
-        new_messages = loop.run_until_complete(
-            _process_query_with_tools(question, history, session_id, file_upload, client, model, reimbursement_rules, mcp_client)
-        )
-        return "", history + [{"role": "user", "content": question}] + new_messages
+        # Process the query with streaming multi-tool support
+        async def stream_process():
+            async for updated_history in _process_query_with_tools_streaming(
+                question, history, session_id, file_upload, client, model, reimbursement_rules, mcp_client
+            ):
+                yield "", updated_history
+
+        # Run the async generator
+        async_gen = stream_process()
+        while True:
+            try:
+                result = loop.run_until_complete(async_gen.__anext__())
+                yield result
+            except StopAsyncIteration:
+                break
 
     except Exception as e:
         error_response = f"❌ 回答问题时出错: {str(e)}"
-        history.append({"role": "user", "content": question})
         history.append({"role": "assistant", "content": error_response})
-        return "", history
+        yield "", history
 
+
+async def _process_query_with_tools_streaming(question, history, session_id: str, file_upload, client, model, reimbursement_rules, mcp_client):
+    """Process query with streaming multi-tool calling support"""
+    # Create context with rules
+    rules_context = json.dumps(reimbursement_rules, ensure_ascii=False, indent=2)
+
+    # Build conversation messages from history (excluding the user question we just added)
+    claude_messages = []
+    for msg in history[:-1]:  # Exclude the last message (user question)
+        if isinstance(msg, dict):
+            role, content = msg.get("role"), msg.get("content")
+            if role in ["user", "assistant", "system"] and content:
+                claude_messages.append({"role": role, "content": content})
+
+    # Prepare the main prompt with detailed audit instructions
+    base_prompt = f"""
+    你是一个财务报销专家，请基于以下财务报销规则对用户的问题进行详细分析和审核。
+
+    财务报销规则：
+    {rules_context}
+
+    用户问题：{question}
+
+    **重要：如果用户上传了发票或要求审核发票，请按以下步骤进行完整的审核流程：**
+
+    1. **发票识别阶段**：
+       - 首先使用 recognize_single_invoice 工具识别发票信息
+       - 提取发票的关键信息：金额、日期、城市、类型等
+
+    2. **规则验证阶段**：
+       - 针对每条相关的财务报销规则，逐一进行验证
+       - 根据需要调用相应的工具：
+         * 如果涉及时间限制，使用 get_current_time 工具获取当前时间进行对比
+         * 如果涉及城市分级标准，使用 query_city_tier 工具查询城市分级
+         * 如果需要批量查询城市，使用 query_multiple_cities 工具
+         * 如果需要获取某个分级的所有城市，使用 get_cities_by_tier 工具
+
+    3. **综合分析阶段**：
+       - 汇总所有验证结果
+       - 给出明确的审核结论：通过/不通过
+       - 列出不符合规则的具体项目
+       - 提供改进建议
+
+    **注意**：
+    - 必须逐条验证所有相关规则，不能跳过任何步骤
+    - 每个验证步骤都要使用相应的工具获取准确信息
+    - 最终给出详细的审核报告
+
+    可用的MCP工具：
+    - recognize_single_invoice: 识别发票信息
+    - get_current_time: 获取当前时间
+    - query_city_tier: 查询单个城市分级
+    - query_multiple_cities: 批量查询多个城市分级
+    - get_cities_by_tier: 获取指定分级的所有城市
+
+    会话ID: {session_id}
+    """
+
+    # Handle file upload and create the main message
+    main_message = await _prepare_main_message(question, file_upload, session_id, rules_context, base_prompt)
+    claude_messages.append(main_message)
+
+    # Get MCP tools if available
+    mcp_tools = []
+    if mcp_client and mcp_client.connected_servers:
+        mcp_tools = mcp_client.get_all_tools()
+
+    # Process with streaming multi-tool calling
+    current_history = history.copy()
+    max_iterations = 8  # Increase iterations for multi-step audit process
+    iteration = 0
+    invoice_recognized = False  # Track if invoice has been recognized
+
+    while iteration < max_iterations:
+        iteration += 1
+
+        # Prepare additional context for continuing audit process
+        additional_context = ""
+        if invoice_recognized and iteration > 1:
+            additional_context = f"""
+
+            **继续审核流程**：
+            发票信息已识别完成。现在请继续进行第{iteration}步：逐条验证财务报销规则。
+
+            请检查以下方面（根据需要调用相应工具）：
+            1. 时间限制验证 - 使用 get_current_time 工具检查报销是否超时
+            2. 城市分级验证 - 使用 query_city_tier 工具检查城市分级标准
+            3. 金额标准验证 - 根据城市分级和规则检查金额是否符合标准
+            4. 其他规则验证 - 逐一检查所有相关规则
+
+            **重要**：必须调用相应的工具来获取准确信息进行验证，不能仅凭推测。
+            """
+
+        # Make the API call with or without tools
+        current_messages = claude_messages.copy()
+        if additional_context and len(current_messages) > 0:
+            # Add continuation prompt to the last user message
+            last_message = current_messages[-1]
+            if last_message["role"] == "user":
+                if isinstance(last_message["content"], str):
+                    last_message["content"] += additional_context
+                elif isinstance(last_message["content"], list):
+                    last_message["content"].append({
+                        "type": "text",
+                        "text": additional_context
+                    })
+
+        response = client.chat.completions.create(
+            model=model,
+            messages=current_messages,
+            temperature=0.3,
+            tools=mcp_tools if mcp_tools else None,
+            tool_choice="auto" if mcp_tools else None,
+            extra_body={
+                "enable_thinking": False
+            }
+        )
+
+        assistant_msg = response.choices[0].message
+
+        # Add assistant response to history and yield immediately
+        if assistant_msg.content:
+            current_history.append({
+                "role": "assistant",
+                "content": assistant_msg.content
+            })
+            yield current_history
+
+        # Check if there are tool calls
+        if assistant_msg.tool_calls and mcp_client:
+            # Process all tool calls in this iteration
+            tool_results = []
+
+            for call in assistant_msg.tool_calls:
+                tool_name = call.function.name
+                tool_args = json.loads(call.function.arguments)
+
+                # Track if invoice recognition tool was called
+                if tool_name == "recognize_single_invoice":
+                    invoice_recognized = True
+
+                # Add tool call message to history and yield
+                current_history.append({
+                    "role": "assistant",
+                    "content": f"使用工具: {tool_name}",
+                    "metadata": {
+                        "title": f"Tool: {tool_name}",
+                        "log": f"参数: {json.dumps(tool_args, ensure_ascii=False)}",
+                        "status": "pending",
+                        "id": f"tool_call_{tool_name}_{iteration}"
+                    }
+                })
+                yield current_history
+
+                # Execute the tool
+                try:
+                    tool_result = await _execute_tool(tool_name, tool_args, session_id, mcp_client)
+                    tool_results.append((call.id, tool_name, tool_result))
+
+                    # Update the tool call status to done
+                    if current_history and "metadata" in current_history[-1]:
+                        current_history[-1]["metadata"]["status"] = "done"
+
+                    # Add tool result to history and yield
+                    current_history.append({
+                        "role": "assistant",
+                        "content": f"工具结果: {tool_name}",
+                        "metadata": {
+                            "title": f"Result: {tool_name}",
+                            "status": "done",
+                            "id": f"result_{tool_name}_{iteration}"
+                        }
+                    })
+
+                    # Format and add the actual result
+                    if isinstance(tool_result, dict):
+                        formatted_result = json.dumps(tool_result, ensure_ascii=False, indent=2)
+                    elif isinstance(tool_result, list):
+                        formatted_result = "\n".join(map(str, tool_result))
+                    else:
+                        formatted_result = str(tool_result)
+
+                    current_history.append({
+                        "role": "assistant",
+                        "content": f"```\n{formatted_result}\n```",
+                        "metadata": {"title": "Raw Output"}
+                    })
+                    yield current_history
+
+                except Exception as e:
+                    error_msg = f"❌ 执行工具 '{tool_name}' 时出错: {str(e)}"
+                    current_history.append({
+                        "role": "assistant",
+                        "content": error_msg
+                    })
+                    tool_results.append((call.id, tool_name, error_msg))
+                    yield current_history
+
+            # Add tool calls and results to conversation history
+            claude_messages.append({
+                "role": "assistant",
+                "content": assistant_msg.content or "",
+                "tool_calls": [
+                    {
+                        "id": call.id,
+                        "type": "function",
+                        "function": {"name": call.function.name, "arguments": call.function.arguments}
+                    } for call in assistant_msg.tool_calls
+                ]
+            })
+
+            # Add tool results to conversation
+            for call_id, tool_name, tool_result in tool_results:
+                claude_messages.append({
+                    "role": "tool",
+                    "tool_call_id": call_id,
+                    "content": str(tool_result)
+                })
+
+            # Continue the loop to allow for more tool calls
+            continue
+        else:
+            # No more tool calls
+            # If invoice was recognized but we haven't done rule validation, prompt for it
+            if invoice_recognized and iteration <= 3:
+                # Add a follow-up prompt to encourage rule validation
+                follow_up_prompt = """
+                请继续完成审核流程。现在需要逐条验证财务报销规则：
+
+                1. 检查报销时间是否超时（使用 get_current_time 工具）
+                2. 检查城市分级标准（使用 query_city_tier 工具）
+                3. 验证金额是否符合标准
+                4. 检查其他相关规则
+
+                请调用相应的工具来获取准确信息进行验证。
+                """
+
+                claude_messages.append({
+                    "role": "user",
+                    "content": follow_up_prompt
+                })
+                continue
+            else:
+                # Really no more tool calls, break the loop
+                break
 
 async def _process_query_with_tools(question, history, session_id: str, file_upload, client, model, reimbursement_rules, mcp_client):
     """Process query with multi-tool calling support"""
@@ -1465,11 +1723,12 @@ class AuditAgentApp:
                     type="messages"
                 )
         
-        # Set up event handlers for chat functionality
+        # Set up event handlers for chat functionality with streaming
         ask_btn.click(
             fn=answer_question_with_session,
             inputs=[question_input, chatbot, session_id, file_upload],
-            outputs=[question_input, chatbot]
+            outputs=[question_input, chatbot],
+            show_progress="full"  # Show progress for streaming
         )
         
         # Set up event handler for example button

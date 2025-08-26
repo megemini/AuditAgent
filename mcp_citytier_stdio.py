@@ -91,11 +91,13 @@ def find_city_tier(city_name: str) -> dict:
                 "message": f"{city_name} 属于 {tier}"
             }
     
+    # 对于不在 CITY_TIERS 中的城市，返回默认分级
+    default_tier = "六线城市、地级市、县级市或其他"
     return {
-        "success": False,
+        "success": True,
         "city": city_name,
-        "tier": "未知",
-        "message": f"未找到城市 {city_name} 的分级信息"
+        "tier": default_tier,
+        "message": f"{city_name} 属于 {default_tier}"
     }
 
 @mcp.tool()

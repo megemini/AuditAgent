@@ -108,28 +108,14 @@ def get_city_tier(city_name: str) -> dict:
             "message": f"{city_name} 属于 {tier}"
         }
     else:
-        # 尝试模糊匹配
-        possible_matches = []
-        for city in CITY_TO_TIER.keys():
-            # 更宽松的匹配条件
-            if (city_name in city or city in city_name or
-                (normalized_name != city_name and (normalized_name in city or city in normalized_name))):
-                possible_matches.append(city)
-        
-        if possible_matches:
-            suggestions = "、".join(possible_matches[:5])
-            return {
-                "success": False,
-                "city": city_name,
-                "suggestions": possible_matches,
-                "message": f"未找到城市 '{city_name}'，您是否想查询：{suggestions}？"
-            }
-        else:
-            return {
-                "success": False,
-                "city": city_name,
-                "message": f"未找到城市 '{city_name}'，请检查城市名称是否正确"
-            }
+        # 对于不在 CITY_TIERS 中的城市，返回默认分级
+        default_tier = "六线城市、地级市、县级市或其他"
+        return {
+            "success": True,
+            "city": city_name,
+            "tier": default_tier,
+            "message": f"{city_name} 属于 {default_tier}"
+        }
 
 @mcp.tool()
 def list_cities_by_tier(tier: str) -> dict:
