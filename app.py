@@ -73,11 +73,11 @@ def get_server_host():
     import os
     
     # 首先检查环境变量
-    host = os.environ.get('SERVER_HOST', '127.0.0.1')
+    host = os.environ.get('SERVER_HOST', '0.0.0.0')
     
-    # 如果设置为localhost，则转换为127.0.0.1
+    # 如果设置为localhost，则转换为0.0.0.0
     if host == 'localhost':
-        host = '127.0.0.1'
+        host = '0.0.0.0'
     
     return host
     
