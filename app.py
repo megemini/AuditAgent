@@ -67,7 +67,31 @@ def cleanup_upload_files():
                     logger.info(f"已删除旧文件: {filename}")
                 except Exception as e:
                     logger.error(f"删除文件 {filename} 失败: {e}")
-
+    
+def get_server_host():
+    """获取服务器主机名，用于生成可访问的URL"""
+    import os
+    import socket
+    
+    # 首先检查环境变量
+    host = os.environ.get('SERVER_HOST', 'localhost')
+    
+    # 如果没有明确设置主机名，尝试自动检测
+    if host == 'localhost':
+        try:
+            # 获取本机主机名
+            hostname = socket.gethostname()
+            # 尝试获取IP地址
+            ip_address = socket.gethostbyname(hostname)
+            # 如果不是本地回环地址，则使用IP地址
+            if ip_address != '127.0.0.1':
+                host = ip_address
+        except:
+            # 如果获取失败，仍然使用localhost
+            pass
+    
+    return host
+    
 def start_file_server(port=8889):
     """启动一个简单的HTTP文件服务器来提供上传文件的访问"""
     import threading
@@ -94,7 +118,11 @@ def start_file_server(port=8889):
     
     server_thread = threading.Thread(target=run_server, daemon=True)
     server_thread.start()
-    return f"http://localhost:{port}"
+    
+    # 使用公共函数获取主机名
+    host = get_server_host()
+    
+    return f"http://{host}:{port}"
 
 
 class FastMCPStdioClientWrapper:
@@ -1098,10 +1126,13 @@ async def _prepare_main_message(question, file_upload, session_id: str, rules_co
             shutil.copy2(file_upload.name, saved_file_path)
 
             # Generate accessible URL for OCR server
-            file_server_url = f"http://localhost:8889/{unique_filename}"
+            # 使用公共函数获取主机名
+            host = get_server_host()
+            
+            file_server_url = f"http://{host}:8889/{unique_filename}"
 
             # Also generate local URL as backup
-            local_file_url = f"http://localhost:7861/upload_files/{unique_filename}"
+            local_file_url = f"http://{host}:7861/upload_files/{unique_filename}"
 
             # Check file type and process accordingly
             file_ext = os.path.splitext(file_upload.name)[1].lower()
@@ -1213,7 +1244,10 @@ async def _execute_tool(tool_name: str, tool_args: dict, session_id: str, mcp_cl
 
                     if os.path.exists(local_file_path):
                         # Use file server URL to ensure OCR server can access it
-                        file_server_url = f"http://localhost:8889/{filename}"
+                        # 使用公共函数获取主机名
+                        host = get_server_host()
+                        
+                        file_server_url = f"http://{host}:8889/{filename}"
                         tool_args["image_url"] = file_server_url
                         logger.info(f"更新图片URL为文件服务器URL: {file_server_url}")
 
