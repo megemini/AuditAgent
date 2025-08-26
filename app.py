@@ -25,6 +25,7 @@ session_store = {}
 # 全局MCP服务器连接状态
 global_city_server_status = ""
 global_invoice_server_status = ""
+global_datetime_server_status = ""
 
 # 配置日志
 logging.basicConfig(
@@ -788,6 +789,15 @@ def load_example_invoice():
         logger.error(f"Example invoice not found at {example_path}")
         return None
 
+def load_example_invoice_with_text():
+    """Load example invoice and set question text"""
+    example_path = os.path.join(os.getcwd(), "examples", "invoice.jpg")
+    if os.path.exists(example_path):
+        return example_path, "审核一下此张发票"
+    else:
+        logger.error(f"Example invoice not found at {example_path}")
+        return None, "审核一下此张发票"
+
 def connect_city_server_with_session(command, session_id: str):
     """Connect to city tier MCP server"""
     import subprocess
@@ -882,6 +892,53 @@ def connect_invoice_server_with_session(command, session_id: str):
         global_invoice_server_status = f"❌ 连接发票识别服务器失败: {str(e)}"
         return global_invoice_server_status
 
+def connect_datetime_server_with_session(command, session_id: str):
+    """Connect to datetime MCP server"""
+    import subprocess
+    import time
+    global global_datetime_server_status
+    
+    if not global_mcp_client:
+        global_datetime_server_status = "❌ MCP客户端未初始化"
+        return global_datetime_server_status
+    
+    try:
+        # 首先检查是否已经连接到服务器
+        if "datetime_server" in global_mcp_client.connected_servers:
+            global_datetime_server_status = "✅ 日期时间服务器已连接"
+            return global_datetime_server_status
+        
+        # 如果未连接，尝试连接
+        command_list = command.split()
+        result = global_mcp_client.connect(command_list, "datetime_server")
+        
+        # 如果连接失败，尝试启动服务器
+        if "❌" in result:
+            logger.info("日期时间服务器连接失败，尝试启动服务器...")
+            try:
+                # 启动服务器
+                server_process = subprocess.Popen(
+                    command_list,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True
+                )
+                logger.info(f"日期时间服务器已启动，PID: {server_process.pid}")
+                time.sleep(3)  # 等待服务器启动
+                
+                # 再次尝试连接
+                result = global_mcp_client.connect(command_list, "datetime_server")
+            except Exception as start_e:
+                logger.error(f"启动日期时间服务器失败: {start_e}")
+                global_datetime_server_status = f"❌ 连接和启动日期时间服务器都失败: {str(e)}; 启动失败: {str(start_e)}"
+                return global_datetime_server_status
+        
+        global_datetime_server_status = result
+        return global_datetime_server_status
+    except Exception as e:
+        global_datetime_server_status = f"❌ 连接日期时间服务器失败: {str(e)}"
+        return global_datetime_server_status
+
 class AuditAgentApp:
     def __init__(self):
         self.setup_ui()
@@ -939,6 +996,68 @@ class AuditAgentApp:
                     label="连接状态",
                     interactive=False
                 )
+        
+        # Set up event handler for connection test
+        test_connection_btn.click(
+            fn=test_and_store_client,
+            inputs=[api_key_input, base_url_input, model_input, session_id],
+            outputs=connection_status
+        )
+        
+        gr.HTML("""
+        <div style="
+            background-color: white;
+            border: 2px dashed #ccc;
+            border-radius: 8px;
+            padding: 20px;
+            margin: 10px 0;
+        ">
+            <h2>📋 项目使用说明</h2>
+            <h3>🎯 项目概述</h3>
+            <p>财务报销智能体是一个基于大语言模型的智能助手，旨在帮助企业员工快速了解财务报销规则、审核报销材料，提高报销效率。</p>
+            
+            <h3>🔧 系统架构</h3>
+            <ul>
+                <li><strong>大语言模型</strong>: 使用 Step 1 中配置的模型进行智能问答和规则提取</li>
+                <li><strong>MCP 服务器</strong>: 提供多种专业功能服务
+                    <ul>
+                        <li>🏙️ 城市分级查询服务器：查询城市分级信息</li>
+                        <li>📄 发票识别LLM服务器：识别发票信息（<strong>使用 Step 1 中配置的大语言模型</strong>）</li>
+                        <li>📅 日期时间服务器：提供日期时间相关功能</li>
+                    </ul>
+                </li>
+            </ul>
+            
+            <h3>📝 使用步骤</h3>
+            <ol>
+                <li><strong>Step 1: 设置</strong> - 配置大语言模型 API</li>
+                <li><strong>Step 2: 知识库</strong> - 上传财务报销规则文档</li>
+                <li><strong>Step 3: MCP服务器管理</strong> - 连接各种功能服务器</li>
+                <li><strong>Step 4: 智能问答</strong> - 基于规则进行智能问答</li>
+            </ol>
+            
+            <h3>⚠️ 重要说明</h3>
+            <ul>
+                <li><strong>发票识别服务器</strong>使用的是 Step 1 中配置的大语言模型，确保模型配置正确</li>
+                <li><strong>实际办公环境建议</strong>：出于数据安全和隐私保护考虑，建议在实际办公环境中使用本地部署的大语言模型</li>
+                <li><strong>本地 LLM 优势</strong>：
+                    <ul>
+                        <li>数据不出本地，保障敏感财务信息安全</li>
+                        <li>响应速度更快，不受网络限制</li>
+                        <li>可根据企业需求进行定制化训练</li>
+                        <li>长期使用成本更低</li>
+                    </ul>
+                </li>
+            </ul>
+            
+            <h3>🔐 安全建议</h3>
+            <ul>
+                <li>涉及敏感财务数据时，优先使用本地部署的 LLM</li>
+                <li>定期更新财务报销规则，确保信息准确性</li>
+                <li>妥善保管 API 密钥，避免泄露</li>
+            </ul>
+        </div>
+        """)
         
         # Set up event handler for connection test
         test_connection_btn.click(
@@ -1080,10 +1199,23 @@ class AuditAgentApp:
         with gr.Row():
             with gr.Column():
                 gr.Markdown("## MCP服务器管理")
-                gr.Markdown("在此步骤中，您可以连接和管理MCP（Model Context Protocol）服务器，包括城市分级查询和发票识别LLM服务器。")
+                gr.Markdown("在此步骤中，您可以连接和管理MCP（Model Context Protocol）服务器，包括城市分级查询、发票识别LLM服务器和日期时间服务器。")
                 
                 # City Tier Server Configuration
                 gr.Markdown("### 🏙️ 城市分级查询服务器")
+                gr.Markdown("""
+                **功能说明：**
+                - 🏙️ **城市分级查询**: 根据城市名称查询城市分级信息
+                - 📊 **分级覆盖**: 覆盖一线、新一线、二线、三线、四线、五线城市
+                - 🔍 **批量查询**: 支持批量查询多个城市的分级信息
+                - 📋 **分级列表**: 获取指定分级的所有城市列表
+                
+                **可用工具：**
+                - query_city_tier: 查询单个城市分级
+                - query_multiple_cities: 批量查询多个城市分级
+                - get_tier_cities: 获取指定分级的城市列表
+                """)
+                
                 city_server_command = gr.Textbox(
                     label="服务器命令",
                     placeholder="python mcp_citytier_stdio.py",
@@ -1102,7 +1234,7 @@ class AuditAgentApp:
                 # Invoice Server Configuration
                 gr.Markdown("### 📄 发票识别LLM服务器")
                 gr.Markdown("""
-                **架构说明：**
+                **功能说明：**
                 - 📋 **多格式支持**: 处理图片文件（JPG、PNG等）和PDF文档
                 - 🔍 **先进OCR技术**: 使用PaddleOCR进行准确的文本提取
                 - 🤖 **AI驱动分析**: 利用大模型进行智能字段提取
@@ -1132,6 +1264,41 @@ class AuditAgentApp:
                     interactive=False
                 )
                 
+                # Datetime Server Configuration
+                gr.Markdown("### 📅 日期时间服务器")
+                gr.Markdown("""
+                **功能说明：**
+                - 📅 **日期查询**: 获取当前日期、时间、日期时间
+                - 🌍 **时区支持**: 支持多个时区的日期时间查询
+                - 🔄 **日期计算**: 支持日期差值计算和日期加减操作
+                - 📝 **格式化**: 支持自定义日期时间格式化
+                
+                **可用工具：**
+                - get_current_date: 获取当前日期
+                - get_current_time: 获取当前时间
+                - get_current_datetime: 获取当前日期时间
+                - get_datetime_by_timezone: 获取指定时区的日期时间
+                - format_datetime: 格式化日期时间
+                - calculate_date_difference: 计算日期差值
+                - add_days_to_date: 日期加减天数
+                - get_timezones: 获取常用时区列表
+                """)
+                
+                datetime_server_command = gr.Textbox(
+                    label="服务器命令",
+                    placeholder="python mcp_datetime_stdio.py",
+                    value="python mcp_datetime_stdio.py",
+                    interactive=False
+                )
+                
+                datetime_connect_btn = gr.Button("连接服务器", variant="primary")
+                
+                datetime_status = gr.Textbox(
+                    label="连接状态",
+                    value=global_datetime_server_status,
+                    interactive=False
+                )
+                
         # Set up event handlers for MCP server management
         city_connect_btn.click(
             fn=connect_city_server_with_session,
@@ -1143,6 +1310,12 @@ class AuditAgentApp:
             fn=connect_invoice_server_with_session,
             inputs=[invoice_server_command, session_id],
             outputs=invoice_status
+        )
+        
+        datetime_connect_btn.click(
+            fn=connect_datetime_server_with_session,
+            inputs=[datetime_server_command, session_id],
+            outputs=datetime_status
         )
     
     def setup_agent_tab(self, session_id):
@@ -1195,8 +1368,8 @@ class AuditAgentApp:
         
         # Set up event handler for example button
         example_btn.click(
-            fn=load_example_invoice,
-            outputs=file_upload
+            fn=load_example_invoice_with_text,
+            outputs=[file_upload, question_input]
         )
         
         clear_chat_btn.click(
@@ -1243,11 +1416,21 @@ if __name__ == "__main__":
             global_invoice_server_status = f"❌ 连接发票识别服务器失败: {str(e)}"
             logger.error(f"连接发票识别服务器失败: {e}")
         
+        # Connect to datetime server
+        try:
+            datetime_result = global_mcp_client.connect(["python", "mcp_datetime_stdio.py"], "datetime_server")
+            global_datetime_server_status = datetime_result
+            logger.info(f"日期时间服务器连接结果: {datetime_result}")
+        except Exception as e:
+            global_datetime_server_status = f"❌ 连接日期时间服务器失败: {str(e)}"
+            logger.error(f"连接日期时间服务器失败: {e}")
+        
         logger.info(f"已连接的服务器: {global_mcp_client.connected_servers}")
     else:
         logger.error("无法初始化MCP客户端")
         global_city_server_status = "❌ 无法初始化MCP客户端"
         global_invoice_server_status = "❌ 无法初始化MCP客户端"
+        global_datetime_server_status = "❌ 无法初始化MCP客户端"
     
     app = AuditAgentApp()
     app.launch()
