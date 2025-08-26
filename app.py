@@ -533,6 +533,19 @@ async def _process_query_with_tools_streaming(question, history, session_id: str
     while iteration < max_iterations:
         iteration += 1
 
+        # Show "AI thinking" indicator before making API call
+        thinking_msg = {
+            "role": "assistant",
+            "content": "🤔 AI正在思考中...",
+            "metadata": {
+                "title": f"AI思考 - 第{iteration}轮分析",
+                "status": "pending",
+                "id": f"thinking_{iteration}"
+            }
+        }
+        current_history.append(thinking_msg)
+        yield current_history
+
         # Prepare additional context for continuing audit process
         additional_context = ""
         if invoice_recognized and iteration > 1:
@@ -575,6 +588,9 @@ async def _process_query_with_tools_streaming(question, history, session_id: str
             }
         )
 
+        # Remove the "thinking" message and replace with actual response
+        current_history.pop()  # Remove the thinking message
+
         assistant_msg = response.choices[0].message
 
         # Add assistant response to history and yield immediately
@@ -601,7 +617,7 @@ async def _process_query_with_tools_streaming(question, history, session_id: str
                 # Add tool call message to history and yield
                 current_history.append({
                     "role": "assistant",
-                    "content": f"使用工具: {tool_name}",
+                    "content": f"🔧 使用工具: {tool_name}",
                     "metadata": {
                         "title": f"Tool: {tool_name}",
                         "log": f"参数: {json.dumps(tool_args, ensure_ascii=False)}",
@@ -619,11 +635,13 @@ async def _process_query_with_tools_streaming(question, history, session_id: str
                     # Update the tool call status to done
                     if current_history and "metadata" in current_history[-1]:
                         current_history[-1]["metadata"]["status"] = "done"
+                        # Update content to show completion
+                        current_history[-1]["content"] = f"✅ 工具完成: {tool_name}"
 
                     # Add tool result to history and yield
                     current_history.append({
                         "role": "assistant",
-                        "content": f"工具结果: {tool_name}",
+                        "content": f"📊 工具结果: {tool_name}",
                         "metadata": {
                             "title": f"Result: {tool_name}",
                             "status": "done",
@@ -647,10 +665,19 @@ async def _process_query_with_tools_streaming(question, history, session_id: str
                     yield current_history
 
                 except Exception as e:
+                    # Update the tool call status to error
+                    if current_history and "metadata" in current_history[-1]:
+                        current_history[-1]["metadata"]["status"] = "error"
+                        current_history[-1]["content"] = f"❌ 工具执行失败: {tool_name}"
+
                     error_msg = f"❌ 执行工具 '{tool_name}' 时出错: {str(e)}"
                     current_history.append({
                         "role": "assistant",
-                        "content": error_msg
+                        "content": error_msg,
+                        "metadata": {
+                            "title": f"Error: {tool_name}",
+                            "status": "error"
+                        }
                     })
                     tool_results.append((call.id, tool_name, error_msg))
                     yield current_history
