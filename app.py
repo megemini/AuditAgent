@@ -1070,6 +1070,8 @@ class AuditAgentApp:
         with gr.Row():
             with gr.Column():
                 gr.Markdown("## 知识库 - 财务报销规则提取")
+                gr.Markdown("### 🤖 使用LLM大模型抽取报销规则")
+                gr.Markdown("本步骤使用您在Step 1中配置的大语言模型（LLM）来智能抽取财务报销规则。系统会分析您上传的文档内容，自动识别并提取其中的报销规则，并转换为结构化的JSON格式。")
                 gr.Markdown("支持上传的文档类型：.txt（文本文档）、.pdf（PDF文档）、.docx（Word文档）、.doc（旧版Word文档，建议转换为.docx格式）")
                 
                 file_upload = gr.File(
