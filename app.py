@@ -71,24 +71,13 @@ def cleanup_upload_files():
 def get_server_host():
     """获取服务器主机名，用于生成可访问的URL"""
     import os
-    import socket
     
     # 首先检查环境变量
-    host = os.environ.get('SERVER_HOST', 'localhost')
+    host = os.environ.get('SERVER_HOST', '127.0.0.1')
     
-    # 如果没有明确设置主机名，尝试自动检测
+    # 如果设置为localhost，则转换为127.0.0.1
     if host == 'localhost':
-        try:
-            # 获取本机主机名
-            hostname = socket.gethostname()
-            # 尝试获取IP地址
-            ip_address = socket.gethostbyname(hostname)
-            # 如果不是本地回环地址，则使用IP地址
-            if ip_address != '127.0.0.1':
-                host = ip_address
-        except:
-            # 如果获取失败，仍然使用localhost
-            pass
+        host = '127.0.0.1'
     
     return host
     
