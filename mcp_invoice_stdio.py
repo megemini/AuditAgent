@@ -136,90 +136,131 @@ def recognize_single_invoice(image_url: str = None, image_data: str = None, sess
         #         "message": "请提供有效的 image_url 或 image_data 参数"
         #     }
         
-        try:
-            # 获取OpenAI配置：优先使用直接传递的参数，其次从环境变量中获取（向后兼容）
-            logger.info("检查OpenAI配置...")
-            if api_key and base_url and model:
-                # 使用直接传递的参数
-                logger.info("使用直接传递的OpenAI配置参数")
-                logger.info(f"API基础URL: {base_url}")
-                logger.info(f"模型名称: {model}")
-            elif session_id:
-                # 从环境变量中获取OpenAI配置（向后兼容）
-                logger.info(f"从环境变量获取OpenAI配置，session_id: {session_id}")
-                api_key = os.environ.get(f"OPENAI_API_KEY_{session_id}")
-                base_url = os.environ.get(f"OPENAI_BASE_URL_{session_id}")
-                model = os.environ.get(f"OPENAI_MODEL_{session_id}")
+        # try:
+        #     # 获取OpenAI配置：优先使用直接传递的参数，其次从环境变量中获取（向后兼容）
+        #     logger.info("检查OpenAI配置...")
+        #     if api_key and base_url and model:
+        #         # 使用直接传递的参数
+        #         logger.info("使用直接传递的OpenAI配置参数")
+        #         logger.info(f"API基础URL: {base_url}")
+        #         logger.info(f"模型名称: {model}")
+        #     elif session_id:
+        #         # 从环境变量中获取OpenAI配置（向后兼容）
+        #         logger.info(f"从环境变量获取OpenAI配置，session_id: {session_id}")
+        #         api_key = os.environ.get(f"OPENAI_API_KEY_{session_id}")
+        #         base_url = os.environ.get(f"OPENAI_BASE_URL_{session_id}")
+        #         model = os.environ.get(f"OPENAI_MODEL_{session_id}")
                 
-                if not api_key or not base_url or not model:
-                    logger.error(f"Session {session_id} 缺少必要的OpenAI配置信息")
-                    return {
-                        "success": False,
-                        "message": f"Session {session_id} 缺少必要的OpenAI配置信息"
-                    }
-                logger.info("从环境变量成功获取OpenAI配置")
-            else:
-                logger.error("缺少OpenAI配置信息")
-                return {
-                    "success": False,
-                    "message": "缺少OpenAI配置信息，请提供api_key、base_url和model参数，或提供session_id"
-                }
+        #         if not api_key or not base_url or not model:
+        #             logger.error(f"Session {session_id} 缺少必要的OpenAI配置信息")
+        #             return {
+        #                 "success": False,
+        #                 "message": f"Session {session_id} 缺少必要的OpenAI配置信息"
+        #             }
+        #         logger.info("从环境变量成功获取OpenAI配置")
+        #     else:
+        #         logger.error("缺少OpenAI配置信息")
+        #         return {
+        #             "success": False,
+        #             "message": "缺少OpenAI配置信息，请提供api_key、base_url和model参数，或提供session_id"
+        #         }
             
-            # 处理base64数据或直接调用推理函数
-            if image_data and image_data != "base64_encoded_image_data":
-                logger.info("直接处理Base64图像数据...")
-                # 直接处理base64数据
-                from PIL import Image
-                import numpy as np
-                import io
+        #     # 处理base64数据或直接调用推理函数
+        #     if image_data and image_data != "base64_encoded_image_data":
+        #         logger.info("直接处理Base64图像数据...")
+        #         # 直接处理base64数据
+        #         from PIL import Image
+        #         import numpy as np
+        #         import io
                 
-                # 将bytes转换为PIL图像
-                image = Image.open(io.BytesIO(image_bytes))
-                logger.info(f"原始图像模式: {image.mode}, 尺寸: {image.size}")
+        #         # 将bytes转换为PIL图像
+        #         image_bytes = base64.b64decode(image_data)
+        #         image = Image.open(io.BytesIO(image_bytes))
+        #         logger.info(f"原始图像模式: {image.mode}, 尺寸: {image.size}")
                 
-                # 转换为RGB格式
-                if image.mode != 'RGB':
-                    logger.info(f"转换图像模式从 {image.mode} 到 RGB")
-                    image = image.convert('RGB')
+        #         # 转换为RGB格式
+        #         if image.mode != 'RGB':
+        #             logger.info(f"转换图像模式从 {image.mode} 到 RGB")
+        #             image = image.convert('RGB')
                 
-                # 转换为numpy数组
-                image_array = np.array(image)
-                logger.info(f"图像转换成功，形状: {image_array.shape}")
+        #         # 转换为numpy数组
+        #         image_array = np.array(image)
+        #         logger.info(f"图像转换成功，形状: {image_array.shape}")
                 
-                # 调用修改后的inference函数，直接传递数组
-                logger.info("开始调用inference函数（使用图像数组）...")
-                inference_start_time = time.time()
-                im_show, invoice_fields = inference(None, 'ch', api_key, base_url, model, image_array=image_array)
-                inference_end_time = time.time()
-                logger.info(f"Inference函数调用完成，耗时: {inference_end_time - inference_start_time:.2f}秒")
-            else:
-                # 使用文件路径进行OCR
-                logger.info(f"开始调用inference函数（使用文件路径）: {tmp_file_path}")
-                inference_start_time = time.time()
-                im_show, invoice_fields = inference(tmp_file_path, 'ch', api_key, base_url, model)
-                inference_end_time = time.time()
-                logger.info(f"Inference函数调用完成，耗时: {inference_end_time - inference_start_time:.2f}秒")
+        #         # 调用修改后的inference函数，直接传递数组
+        #         logger.info("开始调用inference函数（使用图像数组）...")
+        #         inference_start_time = time.time()
+        #         im_show, invoice_fields = inference(None, 'ch', api_key, base_url, model, image_array=image_array)
+        #         inference_end_time = time.time()
+        #         logger.info(f"Inference函数调用完成，耗时: {inference_end_time - inference_start_time:.2f}秒")
+        #     else:
+        #         # 使用文件路径进行OCR
+        #         logger.info(f"开始调用inference函数（使用文件路径）: {tmp_file_path}")
+        #         inference_start_time = time.time()
+        #         im_show, invoice_fields = inference(tmp_file_path, 'ch', api_key, base_url, model)
+        #         inference_end_time = time.time()
+        #         logger.info(f"Inference函数调用完成，耗时: {inference_end_time - inference_start_time:.2f}秒")
                 
-            logger.info("OCR推理完成")
-            logger.info(f"提取的发票字段数量: {len(invoice_fields) if invoice_fields else 0}")
+        #     logger.info("OCR推理完成")
+        #     logger.info(f"提取的发票字段数量: {len(invoice_fields) if invoice_fields else 0}")
             
-            # 返回结果
-            result = {
-                "success": True,
-                "invoice_fields": invoice_fields,
-                "message": "发票识别完成"
-            }
+        #     # 返回结果
+        #     result = {
+        #         "success": True,
+        #         "invoice_fields": invoice_fields,
+        #         "message": "发票识别完成"
+        #     }
             
-            recognize_end_time = time.time()
-            logger.info(f"单张发票识别完成，总耗时: {recognize_end_time - recognize_start_time:.2f}秒")
+        #     recognize_end_time = time.time()
+        #     logger.info(f"单张发票识别完成，总耗时: {recognize_end_time - recognize_start_time:.2f}秒")
             
-            return result
-        finally:
-            # 清理临时文件
-            if os.path.exists(tmp_file_path):
-                os.unlink(tmp_file_path)
-                logger.info("临时文件已清理")
-            
+        #     return result
+        # finally:
+        #     # 清理临时文件
+        #     if os.path.exists(tmp_file_path):
+        #         os.unlink(tmp_file_path)
+        #         logger.info("临时文件已清理")
+
+
+
+        # TODO: DEBUG
+        logger.info("直接处理Base64图像数据...")
+        # 直接处理base64数据
+        from PIL import Image
+        import numpy as np
+        import io
+        
+        # 将bytes转换为PIL图像
+        image_bytes = base64.b64decode(image_data)
+        image = Image.open(io.BytesIO(image_bytes))
+        logger.info(f"原始图像模式: {image.mode}, 尺寸: {image.size}")
+        
+        # 转换为RGB格式
+        if image.mode != 'RGB':
+            logger.info(f"转换图像模式从 {image.mode} 到 RGB")
+            image = image.convert('RGB')
+        
+        # 转换为numpy数组
+        image_array = np.array(image)
+        logger.info(f"图像转换成功，形状: {image_array.shape}")
+        
+        # 调用修改后的inference函数，直接传递数组
+        logger.info("开始调用inference函数（使用图像数组）...")
+        inference_start_time = time.time()
+        im_show, invoice_fields = inference(None, 'ch', api_key, base_url, model, image_array=image_array)
+        inference_end_time = time.time()
+        logger.info(f"Inference函数调用完成，耗时: {inference_end_time - inference_start_time:.2f}秒")
+
+        logger.info("OCR推理完成")
+        logger.info(f"提取的发票字段数量: {len(invoice_fields) if invoice_fields else 0}")
+        
+        # 返回结果
+        result = {
+            "success": True,
+            "invoice_fields": invoice_fields,
+            "message": "发票识别完成"
+        }
+
     except Exception as e:
         logger.error(f"发票识别失败: {str(e)}; {image_url}; {image_data}")
         return {
