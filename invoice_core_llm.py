@@ -498,22 +498,35 @@ def extract_text_from_pdf(pdf_path, lang):
     return all_text
 
 
-def inference(file_path, lang, api_key, base_url, model):
+def inference(file_path, lang, api_key, base_url, model, image_array=None):
     """Process both image and PDF files using OpenAI API"""
     global _model_managers
 
     # 确保OCR模型已初始化
     _initialize_models()
 
-    # Check if file is PDF
-    if file_path.lower().endswith('.pdf'):
+    # 处理PDF文件
+    if file_path and file_path.lower().endswith('.pdf'):
         # Extract text from PDF
         txts = extract_text_from_pdf(file_path, lang)
 
         # For PDF, we can't draw OCR boxes, so return None for image
         im_show = None
+    
+    # 处理图像数据（文件路径或numpy数组）
+    elif image_array is not None:
+        # 使用numpy数组直接进行OCR
+        ocr = _model_managers[lang]
+        result = ocr.infer(image_array, cls=True)[0]
+        image = Image.fromarray(image_array).convert("RGB")
+        boxes = [line[0] for line in result]
+        txts = [line[1][0] for line in result]
+        scores = [line[1][1] for line in result]
+        im_show = draw_ocr(image, boxes, txts, scores,
+                        font_path="./simfang.ttf")
+    
     else:
-        # Process as image
+        # 使用文件路径进行OCR
         ocr = _model_managers[lang]
         result = ocr.infer(file_path, cls=True)[0]
         img_path = file_path

@@ -91,6 +91,7 @@ def recognize_single_invoice(image_url: str = None, image_data: str = None, sess
             with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as tmp_file:
                 tmp_file.write(image_bytes)
                 tmp_file_path = tmp_file.name
+
         else:
             return {
                 "success": False,
@@ -119,14 +120,33 @@ def recognize_single_invoice(image_url: str = None, image_data: str = None, sess
                     "message": "缺少OpenAI配置信息，请提供api_key、base_url和model参数，或提供session_id"
                 }
             
-            # 调用使用OpenAI API的推理函数
-            logger.info(f"开始调用OCR推理，文件路径: {tmp_file_path}")
-            try:
+            # 处理base64数据或直接调用推理函数
+            if image_data and image_data != "base64_encoded_image_data":
+                # 直接处理base64数据
+                from PIL import Image
+                import numpy as np
+                import io
+                
+                # 将bytes转换为PIL图像
+                image = Image.open(io.BytesIO(image_bytes))
+                
+                # 转换为RGB格式
+                if image.mode != 'RGB':
+                    image = image.convert('RGB')
+                
+                # 转换为numpy数组
+                image_array = np.array(image)
+                
+                logger.info(f"图像转换成功，形状: {image_array.shape}")
+                
+                # 调用修改后的inference函数，直接传递数组
+                im_show, invoice_fields = inference(None, 'ch', api_key, base_url, model, image_array=image_array)
+            else:
+                # 使用文件路径进行OCR
+                logger.info(f"开始调用OCR推理，文件路径: {tmp_file_path}")
                 im_show, invoice_fields = inference(tmp_file_path, 'ch', api_key, base_url, model)
-                logger.info("OCR推理完成")
-            except Exception as e:
-                logger.error(f"OCR推理失败: {str(e)}")
-                raise e
+                
+            logger.info("OCR推理完成")
             
             # 返回结果
             return {
