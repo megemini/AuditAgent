@@ -1960,4 +1960,4 @@ if __name__ == "__main__":
         global_datetime_server_status = "❌ 无法初始化MCP客户端"
     
     app = AuditAgentApp()
-    app.launch(debug=True)
+    app.launch()
