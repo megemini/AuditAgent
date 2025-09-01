@@ -102,39 +102,39 @@ def recognize_single_invoice(image_url: str = None, image_data: str = None, sess
                f"model={'提供' if model else '未提供'}")
     
     try:
-        # 确定图像源
-        if image_url:
-            logger.info("使用URL图像源...")
-            logger.info(f"图像URL: {image_url[:50]}...")  # 显示URL前50个字符
-            # 从 URL 下载图像
-            tmp_file_path = download_image(image_url)
-        elif image_data and image_data != "base64_encoded_image_data":
-            logger.info("使用Base64图像数据...")
-            logger.info(f"Base64数据长度: {len(image_data)}字符")
-            # 解码 base64 图像数据
-            try:
-                image_bytes = base64.b64decode(image_data)
-                logger.info(f"Base64解码成功，数据长度: {len(image_bytes)}字节")
-            except Exception as e:
-                logger.error(f"Base64解码失败: {str(e)}")
-                return {
-                    "success": False,
-                    "message": f"Base64 解码失败: {str(e)}"
-                }
+        # # 确定图像源
+        # if image_url:
+        #     logger.info("使用URL图像源...")
+        #     logger.info(f"图像URL: {image_url[:50]}...")  # 显示URL前50个字符
+        #     # 从 URL 下载图像
+        #     tmp_file_path = download_image(image_url)
+        # elif image_data and image_data != "base64_encoded_image_data":
+        #     logger.info("使用Base64图像数据...")
+        #     logger.info(f"Base64数据长度: {len(image_data)}字符")
+        #     # 解码 base64 图像数据
+        #     try:
+        #         image_bytes = base64.b64decode(image_data)
+        #         logger.info(f"Base64解码成功，数据长度: {len(image_bytes)}字节")
+        #     except Exception as e:
+        #         logger.error(f"Base64解码失败: {str(e)}")
+        #         return {
+        #             "success": False,
+        #             "message": f"Base64 解码失败: {str(e)}"
+        #         }
             
-            # 创建临时文件
-            logger.info("创建临时文件保存Base64图像数据...")
-            with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as tmp_file:
-                tmp_file.write(image_bytes)
-                tmp_file_path = tmp_file.name
-            logger.info(f"临时文件创建成功: {tmp_file_path}")
+        #     # 创建临时文件
+        #     logger.info("创建临时文件保存Base64图像数据...")
+        #     with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as tmp_file:
+        #         tmp_file.write(image_bytes)
+        #         tmp_file_path = tmp_file.name
+        #     logger.info(f"临时文件创建成功: {tmp_file_path}")
 
-        else:
-            logger.error("未提供有效的图像源")
-            return {
-                "success": False,
-                "message": "请提供有效的 image_url 或 image_data 参数"
-            }
+        # else:
+        #     logger.error("未提供有效的图像源")
+        #     return {
+        #         "success": False,
+        #         "message": "请提供有效的 image_url 或 image_data 参数"
+        #     }
         
         try:
             # 获取OpenAI配置：优先使用直接传递的参数，其次从环境变量中获取（向后兼容）
