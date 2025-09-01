@@ -221,7 +221,7 @@ def recognize_single_invoice(image_url: str = None, image_data: str = None, sess
                 logger.info("临时文件已清理")
             
     except Exception as e:
-        logger.error(f"发票识别失败: {str(e)}")
+        logger.error(f"发票识别失败: {str(e)}; {image_url}; {image_data}")
         return {
             "success": False,
             "message": f"发票识别失败: {str(e)}"
