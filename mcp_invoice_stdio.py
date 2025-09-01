@@ -245,11 +245,14 @@ def recognize_single_invoice(image_url: str = None, image_data: str = None, sess
         logger.info(f"图像转换成功，形状: {image_array.shape}")
         
         # 调用修改后的inference函数，直接传递数组
-        logger.info("开始调用inference函数（使用图像数组）...")
-        inference_start_time = time.time()
-        im_show, invoice_fields = inference(None, 'ch', api_key, base_url, model, image_array=image_array)
-        inference_end_time = time.time()
-        logger.info(f"Inference函数调用完成，耗时: {inference_end_time - inference_start_time:.2f}秒")
+        # logger.info("开始调用inference函数（使用图像数组）...")
+        # inference_start_time = time.time()
+        # im_show, invoice_fields = inference(None, 'ch', api_key, base_url, model, image_array=image_array)
+        # inference_end_time = time.time()
+        # logger.info(f"Inference函数调用完成，耗时: {inference_end_time - inference_start_time:.2f}秒")
+
+        # TODO: DEBUG
+        invoice_fields = np.shape(image_array.shape)
 
         logger.info("OCR推理完成")
         logger.info(f"提取的发票字段数量: {len(invoice_fields) if invoice_fields else 0}")
