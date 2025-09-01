@@ -8,8 +8,16 @@ import base64
 import tempfile
 import os
 import requests
+import logging
 from fastmcp import FastMCP
 from invoice_core_llm import inference
+
+# 配置日志
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 # 创建 FastMCP 应用
 mcp = FastMCP("发票识别LLM")
@@ -71,7 +79,9 @@ def recognize_single_invoice(image_url: str = None, image_data: str = None, sess
             # 解码 base64 图像数据
             try:
                 image_bytes = base64.b64decode(image_data)
+                logger.info(f"Base64解码成功，数据长度: {len(image_bytes)}")
             except Exception as e:
+                logger.error(f"Base64解码失败: {str(e)}")
                 return {
                     "success": False,
                     "message": f"Base64 解码失败: {str(e)}"
@@ -110,7 +120,13 @@ def recognize_single_invoice(image_url: str = None, image_data: str = None, sess
                 }
             
             # 调用使用OpenAI API的推理函数
-            im_show, invoice_fields = inference(tmp_file_path, 'ch', api_key, base_url, model)
+            logger.info(f"开始调用OCR推理，文件路径: {tmp_file_path}")
+            try:
+                im_show, invoice_fields = inference(tmp_file_path, 'ch', api_key, base_url, model)
+                logger.info("OCR推理完成")
+            except Exception as e:
+                logger.error(f"OCR推理失败: {str(e)}")
+                raise e
             
             # 返回结果
             return {
@@ -179,10 +195,38 @@ def recognize_multiple_invoices(image_list: list, session_id: str = None,
                     # 假设是 base64 数据
                     image_bytes = base64.b64decode(image_item)
                     
-                    # 创建临时文件
-                    with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as tmp_file:
-                        tmp_file.write(image_bytes)
-                        tmp_file_path = tmp_file.name
+                    # 创建临时文件并验证图像格式
+                    try:
+                        # 首先尝试保存为原始格式
+                        with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp_file:
+                            tmp_file.write(image_bytes)
+                            tmp_file_path = tmp_file.name
+                        
+                        # 验证文件是否为有效图像
+                        try:
+                            from PIL import Image
+                            img = Image.open(tmp_file_path)
+                            img.verify()  # 验证图像完整性
+                            img = Image.open(tmp_file_path)  # 重新打开，因为verify会关闭文件
+                            img = img.convert('RGB')  # 转换为RGB确保兼容性
+                            
+                            # 保存为JPG格式
+                            jpg_path = tmp_file_path + '.jpg'
+                            img.save(jpg_path, 'JPEG', quality=95)
+                            os.unlink(tmp_file_path)
+                            tmp_file_path = jpg_path
+                            
+                            logger.info(f"图像验证成功，转换为JPG: {tmp_file_path}")
+                        except Exception as e:
+                            logger.warning(f"图像验证失败，使用原始文件: {e}")
+                            # 如果验证失败，继续使用原始文件
+                        
+                    except Exception as e:
+                        logger.error(f"创建临时文件失败: {str(e)}")
+                        return {
+                            "success": False,
+                            "message": f"创建临时文件失败: {str(e)}"
+                        }
             else:
                 results.append({
                     "index": i,
