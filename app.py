@@ -67,51 +67,8 @@ def cleanup_upload_files():
                     logger.info(f"已删除旧文件: {filename}")
                 except Exception as e:
                     logger.error(f"删除文件 {filename} 失败: {e}")
-    
-def get_server_host():
-    """获取服务器主机名，用于生成可访问的URL"""
-    import os
-    
-    # 首先检查环境变量
-    host = os.environ.get('SERVER_HOST', '0.0.0.0')
-    
-    # 如果设置为localhost，则转换为0.0.0.0
-    if host == 'localhost':
-        host = '0.0.0.0'
-    
-    return host
-    
-def start_file_server(port=8889):
-    """启动一个简单的HTTP文件服务器来提供上传文件的访问"""
-    import threading
-    import http.server
-    import socketserver
-    
-    class FileHandler(http.server.SimpleHTTPRequestHandler):
-        def __init__(self, *args, **kwargs):
-            super().__init__(*args, directory=os.path.join(os.getcwd(), "upload_files"), **kwargs)
-        
-        def end_headers(self):
-            self.send_header('Access-Control-Allow-Origin', '*')
-            self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
-            self.send_header('Access-Control-Allow-Headers', '*')
-            super().end_headers()
-    
-    def run_server():
-        try:
-            with socketserver.TCPServer(("", port), FileHandler) as httpd:
-                logger.info(f"文件服务器启动在端口 {port}")
-                httpd.serve_forever()
-        except Exception as e:
-            logger.error(f"文件服务器启动失败: {e}")
-    
-    server_thread = threading.Thread(target=run_server, daemon=True)
-    server_thread.start()
-    
-    # 使用公共函数获取主机名
-    host = get_server_host()
-    
-    return f"http://{host}:{port}"
+
+
 
 
 class FastMCPStdioClientWrapper:
@@ -1095,33 +1052,18 @@ def _should_continue_audit(claude_messages, reimbursement_rules, iteration):
 async def _prepare_main_message(question, file_upload, session_id: str, rules_context: str, base_prompt: str):
     """Prepare the main message with file upload handling"""
     if file_upload:
+        logger.info(f">>> file_upload: {file_upload}")
+
         # Run cleanup before processing new file
         cleanup_upload_files()
 
         message_content = []
 
         try:
-            # Generate unique filename
-            unique_filename = f"{uuid.uuid4()}_{os.path.basename(file_upload.name)}"
-
-            # Ensure upload_files directory exists
-            upload_dir = os.path.join(os.getcwd(), "upload_files")
-            os.makedirs(upload_dir, exist_ok=True)
-
-            # Save file to upload_files directory
-            saved_file_path = os.path.join(upload_dir, unique_filename)
-
-            # Copy uploaded file to upload_files directory
-            shutil.copy2(file_upload.name, saved_file_path)
-
-            # Generate accessible URL for OCR server
-            # 使用公共函数获取主机名
-            host = get_server_host()
-            
-            file_server_url = f"http://{host}:8889/upload_files/{unique_filename}"
-
-            # Also generate local URL as backup
-            local_file_url = f"http://{host}:7861/upload_files/{unique_filename}"
+            # Read file content directly and convert to base64
+            with open(file_upload.name, "rb") as file_content:
+                file_data = file_content.read()
+                file_base64 = base64.b64encode(file_data).decode('utf-8')
 
             # Check file type and process accordingly
             file_ext = os.path.splitext(file_upload.name)[1].lower()
@@ -1131,7 +1073,7 @@ async def _prepare_main_message(question, file_upload, session_id: str, rules_co
                 pdf_text = ""
                 try:
                     # Extract text from PDF using PyMuPDF
-                    pdf_document = fitz.open(saved_file_path)
+                    pdf_document = fitz.open(file_upload.name)
                     for page_num in range(len(pdf_document)):
                         page = pdf_document.load_page(page_num)
                         pdf_text += page.get_text() + "\n"
@@ -1140,8 +1082,12 @@ async def _prepare_main_message(question, file_upload, session_id: str, rules_co
                     # Add text content with PDF processing instructions
                     message_content.append({
                         "type": "text",
-                        "text": f"{base_prompt}\n\n请注意：用户已上传了一个PDF文件，文件内容如下：\n\n{pdf_text}\n\n如果PDF中包含发票信息，请使用 recognize_single_invoice 工具来识别发票信息。请将PDF中的发票内容完整提取出来。\n\n可用的文件访问方式：\n- 文件服务器URL: {file_server_url} (推荐)\n- 本地Gradio URL: {local_file_url}\n\n请使用 recognize_single_invoice 工具，该工具接受以下参数：\n- image_url: 图片的URL地址\n- image_data: base64编码的图片数据\n\n建议优先使用 image_url 参数，值为: {file_server_url}"
+                        "text": f"{base_prompt}\n\n请注意：用户已上传了一个PDF文件，文件内容如下：\n\n{pdf_text}\n\n如果PDF中包含发票信息，请使用 recognize_single_invoice 工具来识别发票信息。请将PDF中的发票内容完整提取出来。\n\n请使用 recognize_single_invoice 工具，该工具接受以下参数：\n- image_data: base64编码的图片数据\n\n已准备好base64编码的PDF数据，可以直接使用。"
                     })
+
+                    # Store base64 data for tool usage
+                    session_store[session_id]["file_base64"] = file_base64
+                    session_store[session_id]["file_type"] = "pdf"
 
                 except Exception as e:
                     logger.error(f"Error processing PDF: {e}")
@@ -1151,11 +1097,6 @@ async def _prepare_main_message(question, file_upload, session_id: str, rules_co
                     })
             else:
                 # Process image file
-                # Read image file and convert to base64
-                with open(saved_file_path, "rb") as img_file:
-                    img_data = img_file.read()
-                    img_base64 = base64.b64encode(img_data).decode('utf-8')
-
                 # Get MIME type for image
                 mime_type = {
                     '.jpg': 'image/jpeg',
@@ -1167,12 +1108,12 @@ async def _prepare_main_message(question, file_upload, session_id: str, rules_co
                 }.get(file_ext, 'image/jpeg')
 
                 # Create data URL
-                data_url = f"data:{mime_type};base64,{img_base64}"
+                data_url = f"data:{mime_type};base64,{file_base64}"
 
                 # Add text content with image processing instructions
                 message_content.append({
                     "type": "text",
-                    "text": f"{base_prompt}\n\n请注意：用户已上传了一张图片，请使用 recognize_single_invoice 工具来识别图片中的发票信息。请将图片中的发票内容完整提取出来。\n\n可用的图片访问方式：\n- 文件服务器URL: {file_server_url} (推荐)\n- 本地Gradio URL: {local_file_url}\n- Base64数据: 已准备好\n\n请使用 recognize_single_invoice 工具，该工具接受以下参数：\n- image_url: 图片的URL地址\n- image_data: base64编码的图片数据\n\n建议优先使用 image_url 参数，值为: {file_server_url}"
+                    "text": f"{base_prompt}\n\n请注意：用户已上传了一张图片，请使用 recognize_single_invoice 工具来识别图片中的发票信息。请将图片中的发票内容完整提取出来。\n\n请使用 recognize_single_invoice 工具，该工具接受以下参数：\n- image_data: base64编码的图片数据\n\n已准备好base64编码的图片数据，可以直接使用。"
                 })
 
                 # Add image content
@@ -1182,6 +1123,10 @@ async def _prepare_main_message(question, file_upload, session_id: str, rules_co
                         "url": data_url
                     }
                 })
+
+                # Store base64 data for tool usage
+                session_store[session_id]["file_base64"] = file_base64
+                session_store[session_id]["file_type"] = "image"
 
             return {"role": "user", "content": message_content}
 
@@ -1221,46 +1166,32 @@ async def _execute_tool(tool_name: str, tool_args: dict, session_id: str, mcp_cl
                         tool_args["model"] = model
                         logger.info("已添加OpenAI配置参数到工具调用")
 
-            # Check if there's an image_url parameter
-            if "image_url" in tool_args:
-                image_url = tool_args["image_url"]
-                logger.info(f"处理图片URL: {image_url}")
-
-                # If it's a local URL, try to convert to an accessible URL
-                if image_url.startswith("http://localhost:7861/upload_files/"):
-                    filename = image_url.split("/")[-1]
-                    local_file_path = os.path.join(os.getcwd(), "upload_files", filename)
-
-                    if os.path.exists(local_file_path):
-                        # Use file server URL to ensure OCR server can access it
-                        # 使用公共函数获取主机名
-                        host = get_server_host()
-                        
-                        file_server_url = f"http://{host}:8889/upload_files/{filename}"
-                        tool_args["image_url"] = file_server_url
-                        logger.info(f"更新图片URL为文件服务器URL: {file_server_url}")
-
-                        # Also provide base64 data as backup (OCR tool supports this parameter)
-                        try:
-                            with open(local_file_path, "rb") as img_file:
-                                img_data = img_file.read()
-                                img_base64 = base64.b64encode(img_data).decode('utf-8')
-                                tool_args["image_data"] = img_base64
-                                logger.info("已添加base64图片数据作为备用")
-                        except Exception as e:
-                            logger.warning(f"无法生成base64数据: {e}")
-                    else:
-                        logger.error(f"本地文件不存在: {local_file_path}")
-                elif image_url.startswith("http://localhost:8889/"):
-                    # Already a file server URL, no conversion needed
-                    logger.info(f"使用文件服务器URL: {image_url}")
+            # Use base64 image data from session storage instead of file URLs
+            if "file_base64" in session_data:
+                file_base64 = session_data["file_base64"]
+                file_type = session_data.get("file_type", "image")
+                
+                # For PDF files, we need to handle them differently
+                if file_type == "pdf":
+                    # For PDF, we need to convert to image first or handle differently
+                    # For now, we'll skip PDF processing in OCR tools
+                    logger.info("PDF文件暂不支持OCR识别")
+                else:
+                    # Use base64 image data directly
+                    tool_args["image_data"] = file_base64
+                    logger.info("已使用base64图片数据")
+                    
+                    # Remove image_url if it exists to avoid conflicts
+                    if "image_url" in tool_args:
+                        del tool_args["image_url"]
+                        logger.info("已移除image_url参数，使用image_data")
 
             # Ensure only OCR tool supported parameters are passed
             valid_args = {}
-            if "image_url" in tool_args:
-                valid_args["image_url"] = tool_args["image_url"]
             if "image_data" in tool_args:
                 valid_args["image_data"] = tool_args["image_data"]
+            if "image_url" in tool_args:
+                valid_args["image_url"] = tool_args["image_url"]
             # Always include session_id for invoice recognition tool
             valid_args["session_id"] = session_id
             # Include OpenAI configuration if available
@@ -1904,15 +1835,8 @@ class AuditAgentApp:
         self.app.launch(debug=True)
 
 if __name__ == "__main__":
-    # Clean up old upload files
-    cleanup_upload_files()
-    
-    # Ensure upload_files directory exists
-    os.makedirs(os.path.join(os.getcwd(), "upload_files"), exist_ok=True)
-    
-    # Start file server
-    file_server_base_url = start_file_server(8889)
-    logger.info(f"文件服务器已启动: {file_server_base_url}")
+    # Initialize session storage
+    logger.info("应用启动完成，已禁用文件服务器")
 
     # Connect to the MCP servers using the global client
     logger.info("正在连接到MCP服务器...")
