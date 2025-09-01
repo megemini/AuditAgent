@@ -14,15 +14,52 @@ from fastmcp import FastMCP
 from invoice_core_llm import inference
 
 # 配置日志
-logging.basicConfig(
-    level=logging.DEBUG,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.StreamHandler(),
-        logging.FileHandler('mcp_invoice_stdio_debug.log', encoding='utf-8')
-    ]
-)
-logger = logging.getLogger(__name__)
+# 创建一个专门的logger，避免与主应用冲突
+logger = logging.getLogger('mcp_invoice_stdio')
+logger.setLevel(logging.DEBUG)
+
+# 创建格式化器
+formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+
+# 添加文件处理器
+file_handler = logging.FileHandler('mcp_invoice_stdio_debug.log', encoding='utf-8')
+file_handler.setFormatter(formatter)
+file_handler.setLevel(logging.DEBUG)
+logger.addHandler(file_handler)
+
+# 尝试添加控制台处理器，如果父进程支持的话
+try:
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(formatter)
+    console_handler.setLevel(logging.INFO)
+    logger.addHandler(console_handler)
+    logger.info("成功添加控制台日志处理器")
+except Exception as e:
+    logger.warning(f"无法添加控制台日志处理器: {e}")
+
+# 尝试将日志传递给父进程
+try:
+    # 使用sys.stdout将日志输出到标准输出，父进程可以捕获
+    import sys
+    class StdoutHandler(logging.Handler):
+        def emit(self, record):
+            try:
+                msg = self.format(record)
+                sys.stdout.write(f"[MCP_INVOICE_LOG] {msg}\n")
+                sys.stdout.flush()
+            except Exception:
+                pass
+    
+    stdout_handler = StdoutHandler()
+    stdout_handler.setFormatter(formatter)
+    stdout_handler.setLevel(logging.INFO)
+    logger.addHandler(stdout_handler)
+    logger.info("成功添加标准输出日志处理器")
+except Exception as e:
+    logger.warning(f"无法添加标准输出日志处理器: {e}")
+
+# 确保日志不会传播到根logger，避免重复输出
+logger.propagate = False
 
 # 创建 FastMCP 应用
 mcp = FastMCP("发票识别LLM")
