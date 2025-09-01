@@ -13,6 +13,7 @@ import threading
 import base64
 import uuid
 import shutil
+import time
 from contextlib import AsyncExitStack
 
 from fastmcp.client import Client
@@ -29,11 +30,11 @@ global_datetime_server_status = ""
 
 # 配置日志
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
         logging.StreamHandler(),
-        logging.FileHandler('audit_agent.log', encoding='utf-8')
+        logging.FileHandler('audit_agent_debug.log', encoding='utf-8')
     ]
 )
 logger = logging.getLogger(__name__)
@@ -81,31 +82,51 @@ class FastMCPStdioClientWrapper:
     # ------------------------- 连接 -------------------------
     def connect(self, server_command: List[str], server_name: str) -> str:
         """同步封装，方便 Gradio 直接调用"""
-        return loop.run_until_complete(self._connect(server_command, server_name))
+        logger.info(f"开始连接MCP服务器: {server_name}")
+        logger.debug(f"服务器命令: {server_command}")
+        connect_start_time = time.time()
+        
+        result = loop.run_until_complete(self._connect(server_command, server_name))
+        
+        connect_end_time = time.time()
+        logger.info(f"MCP服务器连接完成，耗时: {connect_end_time - connect_start_time:.2f}秒")
+        
+        return result
 
     async def _connect(self, server_command: List[str], server_name: str) -> str:
+        logger.debug(f"开始异步连接MCP服务器: {server_name}")
+        
         # 关闭该服务器的旧连接
         if server_name in self.exit_stacks:
+            logger.debug(f"关闭服务器 {server_name} 的旧连接")
             await self.exit_stacks[server_name].aclose()
         
         self.exit_stacks[server_name] = AsyncExitStack()
+        logger.debug(f"为服务器 {server_name} 创建新的AsyncExitStack")
 
         try:
             # 使用 PythonStdioTransport 创建 Client
             if len(server_command) >= 2 and server_command[0] == "python":
                 script_path = server_command[1]
+                logger.debug(f"使用PythonStdioTransport，脚本路径: {script_path}")
                 transport = PythonStdioTransport(script_path)
             else:
                 # 如果不是标准的 python 命令，使用通用的方式
+                logger.debug(f"使用StdioTransport，命令: {server_command[0]}, 参数: {server_command[1:]}")
                 from fastmcp.client.transports import StdioTransport
                 transport = StdioTransport(command=server_command[0], args=server_command[1:])
 
             # 创建 Client 并进入上下文
+            logger.debug("创建MCP客户端...")
             client = Client(transport)
             self.sessions[server_name] = await self.exit_stacks[server_name].enter_async_context(client)
+            logger.debug(f"MCP客户端创建成功，服务器: {server_name}")
 
             # 拉取工具
+            logger.debug(f"拉取服务器 {server_name} 的工具列表...")
             tools_resp = await self.sessions[server_name].list_tools()
+            logger.debug(f"获取到 {len(tools_resp)} 个工具")
+            
             self.tools[server_name] = [
                 {
                     "type": "function",
@@ -118,31 +139,43 @@ class FastMCPStdioClientWrapper:
                 for tool in tools_resp
             ]
             
+            tool_names = [t['function']['name'] for t in self.tools[server_name]]
+            logger.debug(f"服务器 {server_name} 的工具列表: {tool_names}")
+            
             # 添加到已连接服务器列表
             if server_name not in self.connected_servers:
                 self.connected_servers.append(server_name)
+                logger.info(f"服务器 {server_name} 添加到已连接列表")
             
-            return f"✅ Connected to {server_name}. Available tools: {', '.join(t['function']['name'] for t in self.tools[server_name])}"
+            result = f"✅ Connected to {server_name}. Available tools: {', '.join(tool_names)}"
+            logger.info(f"服务器 {server_name} 连接成功")
+            
+            return result
             
         except Exception as e:
+            logger.error(f"连接服务器 {server_name} 失败: {str(e)}")
+            
             # 清理失败的连接
             if server_name in self.exit_stacks:
                 try:
                     await self.exit_stacks[server_name].aclose()
+                    logger.debug("已清理失败的exit_stack")
                 except:
                     pass
                 del self.exit_stacks[server_name]
             
             if server_name in self.sessions:
                 del self.sessions[server_name]
+                logger.debug("已清理失败的session")
             
             if server_name in self.tools:
                 del self.tools[server_name]
+                logger.debug("已清理失败的工具列表")
             
             if server_name in self.connected_servers:
                 self.connected_servers.remove(server_name)
+                logger.debug("已从已连接列表中移除")
             
-            logger.error(f"Failed to connect to {server_name} with command {server_command}: {str(e)}")
             return f"❌ Failed to connect to {server_name}: {str(e)}"
     
     def get_all_tools(self) -> List[Dict[str, Any]]:
@@ -384,8 +417,17 @@ def extract_reimbursement_rules_with_session(files, session_id: str):
 
 def answer_question_with_session(question, history, session_id: str, file_upload=None):
     """Answer user's question with streaming output support"""
+    logger.info("开始处理用户问题...")
+    answer_start_time = time.time()
+    
+    logger.info(f"问题内容: {question}")
+    logger.info(f"会话ID: {session_id}")
+    logger.info(f"文件上传: {'提供' if file_upload else '未提供'}")
+    
     if not question.strip():
+        logger.info("问题为空，返回空响应")
         yield "", history, None  # Return None for file_upload to clear it
+        return
 
     session_data = session_store.get(session_id, {})
     client = session_data.get("client")
@@ -393,31 +435,47 @@ def answer_question_with_session(question, history, session_id: str, file_upload
     reimbursement_rules = session_data.get("reimbursement_rules", [])
     mcp_client = global_mcp_client
 
+    logger.info(f"会话数据状态: client={'存在' if client else '不存在'}, "
+               f"model={'存在' if model else '不存在'}, "
+               f"报销规则数量: {len(reimbursement_rules)}")
+    logger.info(f"MCP客户端状态: 已连接服务器数量: {len(mcp_client.connected_servers)}")
+    if mcp_client.connected_servers:
+        logger.info(f"已连接的服务器: {', '.join(mcp_client.connected_servers)}")
+
     # Add user question to history first
     history = history + [{"role": "user", "content": question}]
+    logger.info("用户问题已添加到历史记录")
     yield "", history, None  # Return None for file_upload to clear it after sending
 
     if not reimbursement_rules:
+        logger.warning("未找到报销规则，提示用户先上传文档")
         response = "❌ 请先在 Step 2 中上传文档并提取财务报销规则。"
         history.append({"role": "assistant", "content": response})
         yield "", history, None
         return
 
     if not client or not model:
+        logger.warning("未找到OpenAI客户端或模型，提示用户先配置API")
         response = "❌ 请先在 Step 1 中配置 OpenAI API 设置。"
         history.append({"role": "assistant", "content": response})
         yield "", history, None
         return
 
     try:
+        logger.info("开始处理查询，支持流式多工具调用...")
+        process_start_time = time.time()
+        
         # Process the query with streaming multi-tool support
         async def stream_process():
+            logger.info("创建异步流处理生成器...")
             async for updated_history in _process_query_with_tools_streaming(
                 question, history, session_id, file_upload, client, model, reimbursement_rules, mcp_client
             ):
+                logger.info("流处理生成器产生新的历史记录")
                 yield "", updated_history
 
         # Run the async generator
+        logger.info("运行异步生成器...")
         async_gen = stream_process()
         while True:
             try:
@@ -426,20 +484,42 @@ def answer_question_with_session(question, history, session_id: str, file_upload
                 # add None for file_upload clearing
                 yield result[0], result[1], None
             except StopAsyncIteration:
+                logger.info("异步生成器迭代完成")
                 break
+        
+        process_end_time = time.time()
+        logger.info(f"查询处理完成，耗时: {process_end_time - process_start_time:.2f}秒")
 
     except Exception as e:
+        logger.error(f"处理问题时出错: {str(e)}")
         error_response = f"❌ 回答问题时出错: {str(e)}"
         history.append({"role": "assistant", "content": error_response})
         yield "", history, None
+    
+    answer_end_time = time.time()
+    logger.info(f"用户问题处理完成，总耗时: {answer_end_time - answer_start_time:.2f}秒")
 
 
 async def _process_query_with_tools_streaming(question, history, session_id: str, file_upload, client, model, reimbursement_rules, mcp_client):
     """Process query with streaming multi-tool calling support"""
+    logger.info("开始处理查询，支持流式多工具调用...")
+    process_start_time = time.time()
+    
+    logger.info(f"问题: {question}")
+    logger.info(f"历史记录数量: {len(history)}")
+    logger.info(f"文件上传: {'提供' if file_upload else '未提供'}")
+    logger.info(f"报销规则数量: {len(reimbursement_rules)}")
+    logger.info(f"已连接MCP服务器: {mcp_client.connected_servers}")
+    if mcp_client.connected_servers:
+        logger.info(f"已连接的服务器: {', '.join(mcp_client.connected_servers)}")
+    
     # Create context with rules
+    logger.info("创建规则上下文...")
     rules_context = json.dumps(reimbursement_rules, ensure_ascii=False, indent=2)
+    logger.info(f"规则上下文长度: {len(rules_context)}字符")
 
     # Build conversation messages from history (including all previous messages)
+    logger.info("构建对话消息...")
     claude_messages = []
     for msg in history:  # Include all history messages
         if isinstance(msg, dict):
@@ -448,8 +528,11 @@ async def _process_query_with_tools_streaming(question, history, session_id: str
                 # Skip metadata-only messages to keep conversation clean
                 if not (role == "assistant" and ("🤔 AI正在思考" in content or "🔧 使用工具:" in content)):
                     claude_messages.append({"role": role, "content": content})
+    
+    logger.info(f"构建了 {len(claude_messages)} 条对话消息")
 
     # Prepare the main prompt with step-by-step audit instructions
+    logger.info("准备主要提示...")
     base_prompt = f"""
     你是一个财务报销专家，请基于以下财务报销规则对用户的问题进行详细分析和审核。
 
@@ -1877,4 +1960,4 @@ if __name__ == "__main__":
         global_datetime_server_status = "❌ 无法初始化MCP客户端"
     
     app = AuditAgentApp()
-    app.launch()
+    app.launch(debug=True)
