@@ -673,8 +673,8 @@ def inference(file_path, lang, api_key, base_url, model, image_array=None):
         
         logger.info("开始绘制OCR结果...")
         draw_start_time = time.time()
-        im_show = draw_ocr(image, boxes, txts, scores,
-                        font_path="./simfang.ttf")
+        # im_show = draw_ocr(image, boxes, txts, scores,
+        #                 font_path="./simfang.ttf")
         draw_end_time = time.time()
         logger.info(f"OCR结果绘制完成，耗时: {draw_end_time - draw_start_time:.2f}秒")
     
@@ -707,8 +707,8 @@ def inference(file_path, lang, api_key, base_url, model, image_array=None):
         
         logger.info("开始绘制OCR结果...")
         draw_start_time = time.time()
-        im_show = draw_ocr(image, boxes, txts, scores,
-                        font_path="./simfang.ttf")
+        # im_show = draw_ocr(image, boxes, txts, scores,
+        #                 font_path="./simfang.ttf")
         draw_end_time = time.time()
         logger.info(f"OCR结果绘制完成，耗时: {draw_end_time - draw_start_time:.2f}秒")
 
@@ -736,4 +736,4 @@ def inference(file_path, lang, api_key, base_url, model, image_array=None):
     total_time = inference_end_time - inference_start_time
     logger.info(f"发票OCR推理完成，总耗时: {total_time:.2f}秒")
 
-    return im_show, invoice_fields
+    return None, invoice_fields
