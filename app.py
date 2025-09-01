@@ -14,8 +14,6 @@ import base64
 import uuid
 import shutil
 import time
-import sys
-import re
 from contextlib import AsyncExitStack
 
 from fastmcp.client import Client
@@ -40,105 +38,6 @@ logging.basicConfig(
     ]
 )
 logger = logging.getLogger(__name__)
-
-# 创建用于处理子进程日志的logger
-mcp_subprocess_logger = logging.getLogger('mcp_subprocess')
-mcp_subprocess_logger.setLevel(logging.INFO)
-
-# 创建子进程日志处理器
-mcp_log_handler = logging.FileHandler('mcp_subprocess_debug.log', encoding='utf-8')
-mcp_log_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
-mcp_subprocess_logger.addHandler(mcp_log_handler)
-mcp_subprocess_logger.propagate = False
-
-# 正则表达式用于匹配子进程日志
-MCP_LOG_PATTERN = re.compile(r'\[MCP_INVOICE_LOG\] (.*)')
-
-def handle_subprocess_log(line):
-    """处理来自子进程的日志行"""
-    match = MCP_LOG_PATTERN.match(line)
-    if match:
-        log_message = match.group(1)
-        # 将子进程日志记录到主应用的日志系统中
-        mcp_subprocess_logger.info(log_message)
-        # 同时也记录到主logger，但使用DEBUG级别避免重复
-        logger.debug(f"[MCP_SUBPROCESS] {log_message}")
-
-class LogCapturingPythonStdioTransport:
-    """自定义的PythonStdioTransport，用于捕获子进程的日志输出"""
-    
-    def __init__(self, script_path):
-        self.script_path = script_path
-        self.process = None
-        self.stdout_thread = None
-        self.stderr_thread = None
-        
-    async def start(self):
-        """启动子进程并开始捕获输出"""
-        import subprocess
-        
-        # 启动子进程
-        self.process = await asyncio.create_subprocess_exec(
-            sys.executable, self.script_path,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            stdin=asyncio.subprocess.PIPE
-        )
-        
-        # 启动线程来捕获stdout和stderr
-        self.stdout_thread = asyncio.create_task(self._read_stdout())
-        self.stderr_thread = asyncio.create_task(self._read_stderr())
-        
-        logger.info(f"已启动子进程 {self.script_path}，PID: {self.process.pid}")
-        
-    async def _read_stdout(self):
-        """读取子进程的stdout并处理日志"""
-        while self.process and not self.process.stdout.at_eof():
-            line = await self.process.stdout.readline()
-            if line:
-                line_str = line.decode('utf-8').strip()
-                handle_subprocess_log(line_str)
-    
-    async def _read_stderr(self):
-        """读取子进程的stderr并处理日志"""
-        while self.process and not self.process.stderr.at_eof():
-            line = await self.process.stderr.readline()
-            if line:
-                line_str = line.decode('utf-8').strip()
-                # 如果是错误输出，直接记录到主logger
-                logger.error(f"[MCP_SUBPROCESS_ERROR] {line_str}")
-    
-    async def write(self, data):
-        """向子进程的stdin写入数据"""
-        if self.process and self.process.stdin:
-            self.process.stdin.write(data.encode('utf-8'))
-            await self.process.stdin.drain()
-    
-    async def close(self):
-        """关闭子进程"""
-        if self.process:
-            try:
-                self.process.terminate()
-                await asyncio.wait_for(self.process.wait(), timeout=5.0)
-            except asyncio.TimeoutError:
-                self.process.kill()
-                await self.process.wait()
-            
-            # 等待输出读取线程结束
-            if self.stdout_thread:
-                await self.stdout_thread
-            if self.stderr_thread:
-                await self.stderr_thread
-                
-            logger.info(f"已关闭子进程 {self.script_path}")
-    
-    @property
-    def stdin(self):
-        return self
-    
-    @property
-    def stdout(self):
-        return self
 
 loop = asyncio.new_event_loop()
 asyncio.set_event_loop(loop)
@@ -206,21 +105,11 @@ class FastMCPStdioClientWrapper:
         logger.debug(f"为服务器 {server_name} 创建新的AsyncExitStack")
 
         try:
-            # 使用自定义的LogCapturingPythonStdioTransport或标准的PythonStdioTransport创建Client
+            # 使用 PythonStdioTransport 创建 Client
             if len(server_command) >= 2 and server_command[0] == "python":
                 script_path = server_command[1]
-                logger.info(f"使用PythonStdioTransport，脚本路径: {script_path}")
-                
-                # 对于发票识别服务器，使用自定义的传输类以捕获日志
-                if "invoice" in script_path.lower():
-                    logger.info("检测到发票识别服务器，使用日志捕获传输类")
-                    transport = LogCapturingPythonStdioTransport(script_path)
-                    # 启动传输
-                    await transport.start()
-                else:
-                    # 对于其他服务器，使用标准的传输类
-                    logger.debug("使用标准PythonStdioTransport")
-                    transport = PythonStdioTransport(script_path)
+                logger.debug(f"使用PythonStdioTransport，脚本路径: {script_path}")
+                transport = PythonStdioTransport(script_path)
             else:
                 # 如果不是标准的 python 命令，使用通用的方式
                 logger.debug(f"使用StdioTransport，命令: {server_command[0]}, 参数: {server_command[1:]}")
@@ -228,15 +117,15 @@ class FastMCPStdioClientWrapper:
                 transport = StdioTransport(command=server_command[0], args=server_command[1:])
 
             # 创建 Client 并进入上下文
-            logger.info("创建MCP客户端...")
+            logger.debug("创建MCP客户端...")
             client = Client(transport)
             self.sessions[server_name] = await self.exit_stacks[server_name].enter_async_context(client)
-            logger.info(f"MCP客户端创建成功，服务器: {server_name}")
+            logger.debug(f"MCP客户端创建成功，服务器: {server_name}")
 
             # 拉取工具
-            logger.info(f"拉取服务器 {server_name} 的工具列表...")
+            logger.debug(f"拉取服务器 {server_name} 的工具列表...")
             tools_resp = await self.sessions[server_name].list_tools()
-            logger.info(f"获取到 {len(tools_resp)} 个工具")
+            logger.debug(f"获取到 {len(tools_resp)} 个工具")
             
             self.tools[server_name] = [
                 {
@@ -251,7 +140,7 @@ class FastMCPStdioClientWrapper:
             ]
             
             tool_names = [t['function']['name'] for t in self.tools[server_name]]
-            logger.info(f"服务器 {server_name} 的工具列表: {tool_names}")
+            logger.debug(f"服务器 {server_name} 的工具列表: {tool_names}")
             
             # 添加到已连接服务器列表
             if server_name not in self.connected_servers:
@@ -1400,36 +1289,18 @@ async def _execute_tool(tool_name: str, tool_args: dict, session_id: str, mcp_cl
             logger.info(f"最终传递给OCR工具的参数: {list(tool_args.keys())}")
 
         # Get the target server for the tool
-        logger.info(f"获取工具 '{tool_name}' 的目标服务器...")
         target_server = mcp_client.get_server_for_tool(tool_name)
-        logger.info(f"工具 '{tool_name}' 的目标服务器: {target_server}")
-        
         if target_server and target_server in mcp_client.sessions:
-            logger.info(f"开始调用工具 '{tool_name}'，服务器: {target_server}")
-            logger.info(f"工具参数: {tool_args}")
-            
-            tool_call_start_time = time.time()
             tool_result = await mcp_client.sessions[target_server].call_tool(tool_name, tool_args)
-            tool_call_end_time = time.time()
-            
-            logger.info(f"工具 '{tool_name}' 调用完成，耗时: {tool_call_end_time - tool_call_start_time:.2f}秒")
-            logger.info(f"工具结果类型: {type(tool_result)}")
 
             # Process tool result
             if hasattr(tool_result, 'content'):
-                logger.info(f"工具 '{tool_name}' 返回content类型结果")
-                logger.debug(f"工具结果内容长度: {len(tool_result.content) if tool_result.content else 0}")
                 return tool_result.content
             elif isinstance(tool_result, dict):
-                logger.info(f"工具 '{tool_name}' 返回字典类型结果")
-                logger.debug(f"工具结果字典键: {list(tool_result.keys()) if tool_result else []}")
                 return tool_result
             else:
-                logger.info(f"工具 '{tool_name}' 返回字符串类型结果")
-                logger.debug(f"工具结果长度: {len(str(tool_result))}")
                 return str(tool_result)
         else:
-            logger.warning(f"工具 '{tool_name}' 未找到对应的服务器连接，目标服务器: {target_server}")
             return f"❌ 工具 '{tool_name}' 未找到对应的服务器连接"
 
     except Exception as e:
