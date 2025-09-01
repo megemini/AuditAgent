@@ -1891,6 +1891,7 @@ class AuditAgentApp:
                     height=200
                 )
                 gr.Markdown("*免责声明：此示例发票图片仅用于演示目的，图片来源于网络。*")
+                gr.Markdown("*使用说明：由于线上部署的限制，目前仅支持图片格式。*")
         
         # Set up event handlers for chat functionality with streaming
         ask_btn.click(
