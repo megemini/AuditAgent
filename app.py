@@ -1512,13 +1512,13 @@ class AuditAgentApp:
                 base_url_input = gr.Textbox(
                     label="Base URL",
                     placeholder="请输入 OpenAI API 的 Base URL (例如: https://api.openai.com/v1)",
-                    value="https://api-inference.modelscope.cn/v1"
+                    value="https://aistudio.baidu.com/llm/lmapi/v3"
                 )
                 
                 model_input = gr.Textbox(
                     label="Model",
                     placeholder="请输入模型名称 (例如: gpt-3.5-turbo)",
-                    value="Qwen/Qwen3-235B-A22B"
+                    value="ernie-4.5-turbo-vl-preview"
                 )
                 
                 test_connection_btn = gr.Button("测试连接", variant="primary")
