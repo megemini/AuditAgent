@@ -1,5 +1,4 @@
 ---
-# Detailed documentation available at https://modelscope.cn/docs/%E5%88%9B%E7%A9%BA%E9%97%B4%E5%8D%A1%E7%89%87
 domain: multi-modal
 tags:
 - financial reimbursement
@@ -17,7 +16,7 @@ license: Apache License 2.0
 
 #### Clone with HTTP
 ```bash
- git clone https://www.modelscope.cn/studios/megemini/AuditAgent.git
+ git clone http://git.aistudio.baidu.com/942478/AuditAgent.git
 ```
 
 **🌐 Language / 语言**: [English](README_EN.md) | [中文](README.md)
@@ -158,7 +157,7 @@ The Financial Reimbursement Intelligent Agent is an AI-powered assistant based o
 
 1. **Clone the Project**
 ```bash
-git clone https://www.modelscope.cn/studios/megemini/AuditAgent.git
+git clone http://git.aistudio.baidu.com/942478/AuditAgent.git
 cd AuditAgent
 ```
 
