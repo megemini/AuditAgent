@@ -23,6 +23,8 @@ license: Apache License 2.0
 
 # Financial Reimbursement Intelligent Agent (AuditAgent)
 
+![step1](doc/step1.png)
+
 ## 📋 Project Overview
 
 The Financial Reimbursement Intelligent Agent is an AI-powered assistant based on large language models, designed to help enterprise employees quickly understand financial reimbursement policies, audit reimbursement materials, and improve reimbursement efficiency. The system integrates various advanced technologies including natural language processing, optical character recognition (OCR), Model Context Protocol (MCP), and more, providing comprehensive financial reimbursement services to users.
