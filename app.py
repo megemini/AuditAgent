@@ -16,6 +16,17 @@ import shutil
 import time
 from contextlib import AsyncExitStack
 
+# DingTalk integration
+from dingtalk_integration import (
+    is_dingtalk_available,
+    set_logger,
+    start_dingtalk_bot,
+    stop_dingtalk_bot,
+    get_dingtalk_status
+)
+
+DINGTALK_AVAILABLE = is_dingtalk_available()
+
 from fastmcp.client import Client
 from fastmcp.client.transports import PythonStdioTransport
 from openai import AsyncOpenAI
@@ -38,6 +49,15 @@ logging.basicConfig(
     ]
 )
 logger = logging.getLogger(__name__)
+
+# DingTalk bot thread and status - imported from dingtalk_integration
+dingtalk_bot_thread = None
+dingtalk_bot_status = get_dingtalk_status()
+dingtalk_app_key = ""
+dingtalk_app_secret = ""
+
+# Set the logger for dingtalk integration
+set_logger(logger)
 
 loop = asyncio.new_event_loop()
 asyncio.set_event_loop(loop)
@@ -1534,6 +1554,50 @@ class AuditAgentApp:
             inputs=[api_key_input, base_url_input, model_input, session_id],
             outputs=connection_status
         )
+        
+        # DingTalk Integration Section
+        if DINGTALK_AVAILABLE:
+            gr.Markdown("## 钉钉机器人集成")
+            gr.Markdown("配置钉钉机器人消息推送功能")
+            
+            with gr.Row():
+                with gr.Column(scale=1):
+                    dingtalk_app_key = gr.Textbox(
+                        label="钉钉 App Key",
+                        placeholder="请输入您的钉钉 App Key",
+                        type="password"
+                    )
+                    
+                    dingtalk_app_secret = gr.Textbox(
+                        label="钉钉 App Secret", 
+                        placeholder="请输入您的钉钉 App Secret",
+                        type="password"
+                    )
+                    
+                    with gr.Row():
+                        dingtalk_start_btn = gr.Button("启动机器人", variant="primary")
+                        dingtalk_stop_btn = gr.Button("停止机器人", variant="secondary")
+                    
+                    dingtalk_status = gr.Textbox(
+                        label="机器人状态",
+                        value=dingtalk_bot_status,
+                        interactive=False
+                    )
+            
+            # Set up event handlers for DingTalk bot
+            dingtalk_start_btn.click(
+                fn=start_dingtalk_bot,
+                inputs=[dingtalk_app_key, dingtalk_app_secret],
+                outputs=dingtalk_status
+            )
+            
+            dingtalk_stop_btn.click(
+                fn=stop_dingtalk_bot,
+                outputs=dingtalk_status
+            )
+        else:
+            gr.Markdown("## 钉钉机器人集成")
+            gr.Markdown("⚠️ dingtalk-stream 库未安装，钉钉机器人功能不可用。请先安装依赖：`pip install dingtalk-stream`")
         
         gr.HTML("""
         <div style="

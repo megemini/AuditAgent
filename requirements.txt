@@ -11,3 +11,4 @@ requests
 PyMuPDF
 openai
 python-docx
+dingtalk-stream
