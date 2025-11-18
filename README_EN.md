@@ -16,7 +16,7 @@ license: Apache License 2.0
 
 #### Clone with HTTP
 ```bash
- git clone http://git.aistudio.baidu.com/942478/AuditAgent.git
+ git clone https://github.com/megemini/AuditAgent.git
 ```
 
 **🌐 Language / 语言**: [English](README_EN.md) | [中文](README.md)
@@ -159,7 +159,7 @@ The Financial Reimbursement Intelligent Agent is an AI-powered assistant based o
 
 1. **Clone the Project**
 ```bash
-git clone http://git.aistudio.baidu.com/942478/AuditAgent.git
+git clone https://github.com/megemini/AuditAgent.git
 cd AuditAgent
 ```
 
