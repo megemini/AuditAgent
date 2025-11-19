@@ -13,7 +13,7 @@ import logging
 import time
 import io
 from fastmcp import FastMCP
-from paddleocr import PaddleOCR
+from paddle_ocr_manager import get_ocr_manager
 import openai
 import json
 from PIL import Image
@@ -24,8 +24,7 @@ logging.basicConfig(
     level=logging.DEBUG,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.StreamHandler(),
-        logging.FileHandler('mcp_document_stdio_debug.log', encoding='utf-8')
+        logging.StreamHandler()
     ]
 )
 logger = logging.getLogger(__name__)
@@ -33,29 +32,11 @@ logger = logging.getLogger(__name__)
 # 创建 FastMCP 应用
 mcp = FastMCP("单据识别LLM")
 
-# 全局变量，延迟初始化
-_ocr_model = None
-_initialized = False
+# 获取全局 OCR 管理器
+ocr_manager = get_ocr_manager()
 
-def _initialize_ocr():
-    """延迟初始化OCR模型，只在需要时加载"""
-    global _ocr_model, _initialized
-    
-    if _initialized:
-        logger.debug("OCR模型已经初始化，跳过初始化过程")
-        return
-    
-    logger.info("正在初始化单据OCR模型...")
-    start_time = time.time()
-    
-    try:
-        _ocr_model = PaddleOCR(use_angle_cls=True, lang='ch')
-        _initialized = True
-        end_time = time.time()
-        logger.info(f"单据OCR模型初始化完成，耗时: {end_time - start_time:.2f}秒")
-    except Exception as e:
-        logger.error(f"OCR模型初始化失败: {e}")
-        raise
+# 初始化 OCR 模型
+ocr_manager.initialize(lang='ch', use_textline_orientation=True)
 
 def download_image(image_url):
     """
@@ -114,38 +95,7 @@ def extract_text_with_ocr(image_source):
     Returns:
         提取的文字列表
     """
-    logger.info("开始OCR文字提取...")
-    ocr_start_time = time.time()
-    
-    try:
-        # 确保OCR模型已初始化
-        _initialize_ocr()
-        
-        # 执行OCR
-        result = _ocr_model.ocr(image_source, cls=True)[0]
-        
-        # 提取文本
-        txts = [line[1][0] for line in result] if result else []
-        scores = [line[1][1] for line in result] if result else []
-        
-        ocr_end_time = time.time()
-        logger.info(f"OCR文字提取完成，耗时: {ocr_end_time - ocr_start_time:.2f}秒")
-        logger.info(f"提取到文本行数: {len(txts)}")
-        
-        if scores:
-            avg_score = sum(scores) / len(scores)
-            logger.info(f"平均文本置信度: {avg_score:.2f}")
-        
-        logger.info('----- OCR提取的原始文本 -----')
-        for i, txt in enumerate(txts[:5]):  # 显示前5行
-            logger.info(f'[{i}] {txt}')
-        if len(txts) > 5:
-            logger.info(f'... (还有 {len(txts) - 5} 行文本)')
-        
-        return txts
-    except Exception as e:
-        logger.error(f"OCR文字提取失败: {e}")
-        return []
+    return ocr_manager.extract_text(image_source, lang='ch')
 
 def analyze_document_with_ai(ocr_text, user_text, api_key, base_url, model):
     """

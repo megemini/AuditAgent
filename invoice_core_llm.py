@@ -5,9 +5,6 @@
 """
 
 import atexit
-import functools
-from queue import Queue
-from threading import Event, Thread
 import os
 import tempfile
 import json
@@ -17,7 +14,7 @@ import openai
 import logging
 import time
 
-from paddleocr import PaddleOCR
+from paddle_ocr_manager import get_ocr_manager
 from PIL import Image
 
 # 配置日志
@@ -25,108 +22,24 @@ logging.basicConfig(
     level=logging.DEBUG,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.StreamHandler(),
-        logging.FileHandler('invoice_core_llm_debug.log', encoding='utf-8')
+        logging.StreamHandler()
     ]
 )
 logger = logging.getLogger(__name__)
 
 
-# 全局变量，延迟初始化
-_model_managers = None
-_initialized = False
-
-
+# 获取全局 OCR 管理器
+ocr_manager = get_ocr_manager()
 def _initialize_models():
-    """延迟初始化OCR模型，只在需要时加载"""
-    global _model_managers, _initialized
-    
-    if _initialized:
-        logger.debug("OCR模型已经初始化，跳过初始化过程")
-        return
-    
+    """初始化OCR模型"""
     logger.info("正在初始化发票OCR模型...")
     start_time = time.time()
     
-    # Initialize OCR models (keep PaddleOCR for text extraction)
-    LANG_CONFIG = {
-        "ch": {"num_workers": 2},
-    }
+    # 初始化中文OCR模型（单线程版本）
+    ocr_manager.initialize(lang='ch')
     
-    _model_managers = {}
-    for lang, config in LANG_CONFIG.items():
-        logger.debug(f"为语言 {lang} 创建模型管理器，工作线程数: {config['num_workers']}")
-        model_manager = PaddleOCRModelManager(config["num_workers"], functools.partial(create_model, lang=lang))
-        _model_managers[lang] = model_manager
-        logger.debug(f"语言 {lang} 的模型管理器创建完成")
-    
-    # Register cleanup
-    atexit.register(close_model_managers)
-    
-    _initialized = True
     end_time = time.time()
     logger.info(f"发票OCR模型初始化完成，耗时: {end_time - start_time:.2f}秒")
-
-
-class PaddleOCRModelManager(object):
-    def __init__(self,
-                 num_workers,
-                 model_factory):
-        super().__init__()
-        self._model_factory = model_factory
-        self._queue = Queue()
-        self._workers = []
-        self._model_initialized_event = Event()
-        for _ in range(num_workers):
-            worker = Thread(target=self._worker, daemon=False)
-            worker.start()
-            self._model_initialized_event.wait()
-            self._model_initialized_event.clear()
-            self._workers.append(worker)
-
-    def infer(self, *args, **kwargs):
-        # XXX: Should I use a more lightweight data structure, say, a future?
-        result_queue = Queue(maxsize=1)
-        self._queue.put((args, kwargs, result_queue))
-        success, payload = result_queue.get()
-        if success:
-            return payload
-        else:
-            raise payload
-
-    def close(self):
-        for _ in self._workers:
-            self._queue.put(None)
-        for worker in self._workers:
-            worker.join()
-
-    def _worker(self):
-        model = self._model_factory()
-        self._model_initialized_event.set()
-        while True:
-            item = self._queue.get()
-            if item is None:
-                break
-            args, kwargs, result_queue = item
-            try:
-                result = model.ocr(*args, **kwargs)
-                result_queue.put((True, result))
-            except Exception as e:
-                result_queue.put((False, e))
-            finally:
-                self._queue.task_done()
-
-
-def create_model(lang):
-    return PaddleOCR(lang=lang, use_angle_cls=True, use_gpu=False)
-
-
-def close_model_managers():
-    """清理模型管理器"""
-    global _model_managers
-    if _model_managers:
-        for manager in _model_managers.values():
-            manager.close()
 
 
 def validate_and_fix_fields(invoice_fields):
@@ -612,7 +525,6 @@ def extract_text_from_pdf(pdf_path, lang):
 
 def inference(file_path, lang, api_key, base_url, model, image_array=None):
     """Process both image and PDF files using OpenAI API"""
-    global _model_managers
     
     # 记录推理开始时间
     inference_start_time = time.time()
@@ -646,59 +558,31 @@ def inference(file_path, lang, api_key, base_url, model, image_array=None):
         logger.info("PDF文件处理完成，im_show设置为None")
     
     # 处理图像数据（文件路径或numpy数组）
-    elif image_array is not None:
-        logger.info("检测到图像数组，开始OCR处理...")
-        ocr_start_time = time.time()
-        
-        logger.info(f"图像数组形状: {image_array.shape}")
-        # 使用numpy数组直接进行OCR
-        ocr = _model_managers[lang]
-        logger.info("开始OCR推理...")
-        result = ocr.infer(image_array, cls=True)[0]
-        ocr_end_time = time.time()
-        
-        logger.info(f"OCR推理完成，耗时: {ocr_end_time - ocr_start_time:.2f}秒")
-        logger.info(f"OCR结果数量: {len(result)}")
-        
-        image = Image.fromarray(image_array).convert("RGB")
-        boxes = [line[0] for line in result]
-        txts = [line[1][0] for line in result]
-        scores = [line[1][1] for line in result]
-        
-        logger.info(f"提取到文本框: {len(boxes)}个")
-        logger.info(f"提取到文本: {len(txts)}行")
-        if scores:
-            avg_score = sum(scores) / len(scores)
-            logger.info(f"平均文本置信度: {avg_score:.2f}")
-        
-        logger.info("开始绘制OCR结果...")
-        draw_start_time = time.time()
-        # im_show = draw_ocr(image, boxes, txts, scores,
-        #                 font_path="./simfang.ttf")
-        draw_end_time = time.time()
-        logger.info(f"OCR结果绘制完成，耗时: {draw_end_time - draw_start_time:.2f}秒")
-    
     else:
-        logger.info("检测到图像文件，开始OCR处理...")
+        if image_array is not None:
+            logger.info("检测到图像数组，开始OCR处理...")
+        else:
+            logger.info("检测到图像文件，开始OCR处理...")
+        
         ocr_start_time = time.time()
         
-        # 使用文件路径进行OCR
-        ocr = _model_managers[lang]
-        logger.info(f"开始OCR推理，文件路径: {file_path}")
-        result = ocr.infer(file_path, cls=True)[0]
-        ocr_end_time = time.time()
+        # 确定图像源
+        if image_array is not None:
+            image_source = image_array
+            logger.info(f"图像数组形状: {image_array.shape}")
+            image = Image.fromarray(image_array).convert("RGB")
+        else:
+            image_source = file_path
+            logger.info(f"开始OCR推理，文件路径: {file_path}")
+            image = Image.open(file_path).convert("RGB")
         
-        logger.info(f"OCR推理完成，耗时: {ocr_end_time - ocr_start_time:.2f}秒")
-        logger.info(f"OCR结果数量: {len(result)}")
-        
-        img_path = file_path
-        image = Image.open(img_path).convert("RGB")
         logger.info(f"图像尺寸: {image.size}")
         
-        boxes = [line[0] for line in result]
-        txts = [line[1][0] for line in result]
-        scores = [line[1][1] for line in result]
+        # 使用OCR管理器提取文字和边界框
+        boxes, txts, scores = ocr_manager.extract_text_with_boxes(image_source, lang)
         
+        ocr_end_time = time.time()
+        logger.info(f"OCR推理完成，耗时: {ocr_end_time - ocr_start_time:.2f}秒")
         logger.info(f"提取到文本框: {len(boxes)}个")
         logger.info(f"提取到文本: {len(txts)}行")
         if scores:

@@ -42,13 +42,14 @@ global_invoice_server_status = ""
 global_datetime_server_status = ""
 
 # 配置日志
+import sys
 logging.basicConfig(
     level=logging.DEBUG,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.StreamHandler(),
-        logging.FileHandler('audit_agent_debug.log', encoding='utf-8')
-    ]
+        logging.StreamHandler(sys.stderr)
+    ],
+    force=True
 )
 logger = logging.getLogger(__name__)
 

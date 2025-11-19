@@ -18,8 +18,7 @@ logging.basicConfig(
     level=logging.DEBUG,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.StreamHandler(),
-        logging.FileHandler('mcp_invoice_stdio_debug.log', encoding='utf-8')
+        logging.StreamHandler()
     ]
 )
 logger = logging.getLogger(__name__)

@@ -189,7 +189,7 @@ class DingTalkSimpleHandler(dingtalk_stream.ChatbotHandler):
         self.ai_client = ai_client
         self.loop = None
     
-    async def _process_async(self, callback: dingtalk_stream.CallbackMessage):
+    async def process(self, callback: dingtalk_stream.CallbackMessage):
         """处理钉钉消息，支持多种消息类型和AI分析"""
         try:
             if not DINGTALK_AVAILABLE:
@@ -337,39 +337,6 @@ class DingTalkSimpleHandler(dingtalk_stream.ChatbotHandler):
         except Exception as e:
             if self.logger:
                 self.logger.error(f"Error processing DingTalk message: {e}")
-            return AckMessage.STATUS_OK, 'OK'
-    
-    def process(self, callback: dingtalk_stream.CallbackMessage):
-        """Process DingTalk message synchronously by running async handler"""
-        try:
-            # Try to get the running loop
-            try:
-                loop = asyncio.get_running_loop()
-            except RuntimeError:
-                # No running loop, create a new one
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                self.loop = loop
-                if self.logger:
-                    self.logger.debug("Created new event loop for message processing")
-                return loop.run_until_complete(self._process_async(callback))
-            else:
-                # Already in async context, run in a separate thread pool
-                import concurrent.futures
-                def run_async():
-                    new_loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(new_loop)
-                    try:
-                        return new_loop.run_until_complete(self._process_async(callback))
-                    finally:
-                        new_loop.close()
-                
-                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-                    future = executor.submit(run_async)
-                    return future.result(timeout=30)
-        except Exception as e:
-            if self.logger:
-                self.logger.error(f"Error in process: {e}", exc_info=True)
             return AckMessage.STATUS_OK, 'OK'
 
 def start_dingtalk_bot(app_key: str, app_secret: str,
