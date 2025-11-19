@@ -561,11 +561,13 @@ async def _process_query_with_tools_streaming(question, history, session_id: str
 
     用户问题：{question}
 
-    **重要：如果用户上传了发票或要求审核发票，请按以下步骤进行逐条验证的审核流程：**
+    **重要：如果用户上传了单据或要求审核单据，请按以下步骤进行逐条验证的审核流程：**
 
-    **第一步：发票识别**
-    - 使用 recognize_single_invoice 工具识别发票信息
-    - 提取发票的关键信息：金额、日期、城市、类型等
+    **第一步：单据识别**
+    - 使用 recognize_document 工具识别单据信息
+    - 提取单据的关键信息：金额、日期、城市、类型等
+    - 该工具支持多种单据类型：发票、收据、合同、订单、报销单等
+    - 支持灵活的 JSON 格式输出，不严格限制字段结构
 
     **第二步：逐条规则验证**
     - **一次只验证一条规则，按顺序进行**
@@ -601,7 +603,7 @@ async def _process_query_with_tools_streaming(question, history, session_id: str
     - ✅ **不中断流程**：即使某条规则不符合，也要继续验证其他规则
 
     **可用的MCP工具**（按需调用）：
-    - recognize_single_invoice: 识别发票信息
+    - recognize_document: 识别单据信息（支持发票、收据、合同、订单等多种单据类型）
     - get_current_time: 获取当前时间（用于时间相关规则验证）
     - query_city_tier: 查询单个城市分级（用于城市标准相关规则验证）
     - query_multiple_cities: 批量查询多个城市分级
@@ -862,11 +864,13 @@ async def _process_query_with_tools(question, history, session_id: str, file_upl
 
     用户问题：{question}
 
-    **重要：如果用户上传了发票或要求审核发票，请按以下步骤进行完整的审核流程：**
+    **重要：如果用户上传了单据或要求审核单据，请按以下步骤进行完整的审核流程：**
 
-    1. **发票识别阶段**：
-       - 首先使用 recognize_single_invoice 工具识别发票信息
-       - 提取发票的关键信息：金额、日期、城市、类型等
+    1. **单据识别阶段**：
+       - 首先使用 recognize_document 工具识别单据信息
+       - 提取单据的关键信息：金额、日期、城市、类型等
+       - 该工具支持多种单据类型：发票、收据、合同、订单、报销单等
+       - 支持灵活的 JSON 格式输出，自适应识别单据字段
 
     2. **规则验证阶段**：
        - 针对每条相关的财务报销规则，逐一进行验证
@@ -888,7 +892,7 @@ async def _process_query_with_tools(question, history, session_id: str, file_upl
     - 最终给出详细的审核报告
 
     可用的MCP工具：
-    - recognize_single_invoice: 识别发票信息
+    - recognize_document: 识别单据信息（支持发票、收据、合同、订单等多种单据类型）
     - get_current_time: 获取当前时间
     - query_city_tier: 查询单个城市分级
     - query_multiple_cities: 批量查询多个城市分级
@@ -1185,7 +1189,7 @@ async def _prepare_main_message(question, file_upload, session_id: str, rules_co
                     # Add text content with PDF processing instructions
                     message_content.append({
                         "type": "text",
-                        "text": f"{base_prompt}\n\n请注意：用户已上传了一个PDF文件，文件内容如下：\n\n{pdf_text}\n\n如果PDF中包含发票信息，请使用 recognize_single_invoice 工具来识别发票信息。请将PDF中的发票内容完整提取出来。\n\n请使用 recognize_single_invoice 工具，该工具接受以下参数：\n- image_data: base64编码的图片数据\n\n已准备好base64编码的PDF数据，可以直接使用。"
+                        "text": f"{base_prompt}\n\n请注意：用户已上传了一个PDF文件，文件内容如下：\n\n{pdf_text}\n\n如果PDF中包含单据信息，请使用 recognize_document 工具来识别单据信息。该工具支持多种单据类型（发票、收据、合同、订单、报销单等），并能灵活识别其中的内容。请将PDF中的单据内容完整提取出来。\n\n请使用 recognize_document 工具，该工具接受以下参数：\n- image_data: base64编码的图片数据\n- user_text: 用户提供的补充文字信息（可选）\n\n已准备好base64编码的PDF数据，可以直接使用。"
                     })
 
                     # Store base64 data for tool usage
@@ -1216,7 +1220,7 @@ async def _prepare_main_message(question, file_upload, session_id: str, rules_co
                 # Add text content with image processing instructions
                 message_content.append({
                     "type": "text",
-                    "text": f"{base_prompt}\n\n请注意：用户已上传了一张图片，请使用 recognize_single_invoice 工具来识别图片中的发票信息。请将图片中的发票内容完整提取出来。\n\n请使用 recognize_single_invoice 工具，该工具接受以下参数：\n- image_data: base64编码的图片数据\n\n已准备好base64编码的图片数据，可以直接使用。"
+                    "text": f"{base_prompt}\n\n请注意：用户已上传了一张图片，请使用 recognize_document 工具来识别图片中的单据信息。该工具支持多种单据类型（发票、收据、合同、订单、报销单等），并能灵活识别其中的内容。请将图片中的单据内容完整提取出来。\n\n请使用 recognize_document 工具，该工具接受以下参数：\n- image_data: base64编码的图片数据\n- user_text: 用户提供的补充文字信息（可选）\n\n已准备好base64编码的图片数据，可以直接使用。"
                 })
 
                 # Add image content
@@ -1245,29 +1249,23 @@ async def _prepare_main_message(question, file_upload, session_id: str, rules_co
 async def _execute_tool(tool_name: str, tool_args: dict, session_id: str, mcp_client):
     """Execute a single tool and return the result"""
     try:
-        # Special handling for invoice recognition tool
-        if tool_name == "recognize_single_invoice":
-            logger.info(f"处理发票识别工具参数: {tool_args}")
-
-            # Add session_id to the tool arguments
-            tool_args["session_id"] = session_id
-            logger.info(f"添加会话ID: {session_id}")
+        # Special handling for document recognition tool
+        if tool_name == "recognize_document":
+            logger.info(f"处理单据识别工具参数: {tool_args}")
 
             # Get OpenAI configuration from session
             session_data = session_store.get(session_id, {})
             if session_data:
-                # Add OpenAI configuration directly to tool arguments
-                if "client" in session_data and "model" in session_data:
-                    # Try to get API key and base URL from environment variables
-                    api_key = os.environ.get(f"OPENAI_API_KEY_{session_id}")
-                    base_url = os.environ.get(f"OPENAI_BASE_URL_{session_id}")
-                    model = os.environ.get(f"OPENAI_MODEL_{session_id}")
+                # Try to get API key and base URL from environment variables
+                api_key = os.environ.get(f"OPENAI_API_KEY_{session_id}")
+                base_url = os.environ.get(f"OPENAI_BASE_URL_{session_id}")
+                model = os.environ.get(f"OPENAI_MODEL_{session_id}")
 
-                    if api_key and base_url and model:
-                        tool_args["api_key"] = api_key
-                        tool_args["base_url"] = base_url
-                        tool_args["model"] = model
-                        logger.info("已添加OpenAI配置参数到工具调用")
+                if api_key and base_url and model:
+                    tool_args["api_key"] = api_key
+                    tool_args["base_url"] = base_url
+                    tool_args["model"] = model
+                    logger.info("已添加OpenAI配置参数到工具调用")
 
             # Use base64 image data from session storage instead of file URLs
             if "file_base64" in session_data:
@@ -1289,14 +1287,15 @@ async def _execute_tool(tool_name: str, tool_args: dict, session_id: str, mcp_cl
                         del tool_args["image_url"]
                         logger.info("已移除image_url参数，使用image_data")
 
-            # Ensure only OCR tool supported parameters are passed
+            # Ensure only document recognition tool supported parameters are passed
             valid_args = {}
             if "image_data" in tool_args:
                 valid_args["image_data"] = tool_args["image_data"]
             if "image_url" in tool_args:
                 valid_args["image_url"] = tool_args["image_url"]
-            # Always include session_id for invoice recognition tool
-            valid_args["session_id"] = session_id
+            # Include user_text if provided
+            if "user_text" in tool_args:
+                valid_args["user_text"] = tool_args["user_text"]
             # Include OpenAI configuration if available
             if "api_key" in tool_args:
                 valid_args["api_key"] = tool_args["api_key"]
@@ -1306,7 +1305,7 @@ async def _execute_tool(tool_name: str, tool_args: dict, session_id: str, mcp_cl
                 valid_args["model"] = tool_args["model"]
 
             tool_args = valid_args
-            logger.info(f"最终传递给OCR工具的参数: {list(tool_args.keys())}")
+            logger.info(f"最终传递给单据识别工具的参数: {list(tool_args.keys())}")
 
         # Get the target server for the tool
         target_server = mcp_client.get_server_for_tool(tool_name)
@@ -1344,10 +1343,10 @@ def load_example_invoice_with_text():
     """Load example invoice and set question text"""
     example_path = os.path.join(os.getcwd(), "examples", "invoice.jpg")
     if os.path.exists(example_path):
-        return example_path, "审核一下此张发票"
+        return example_path, "审核一下此张单据"
     else:
         logger.error(f"Example invoice not found at {example_path}")
-        return None, "审核一下此张发票"
+        return None, "审核一下此张单据"
 
 def connect_city_server_with_session(command, session_id: str):
     """Connect to city tier MCP server"""
@@ -1397,7 +1396,7 @@ def connect_city_server_with_session(command, session_id: str):
         return global_city_server_status
 
 def connect_invoice_server_with_session(command, session_id: str):
-    """Connect to invoice OCR MCP server"""
+    """Connect to document recognition MCP server"""
     import subprocess
     import time
     global global_invoice_server_status
@@ -1408,17 +1407,17 @@ def connect_invoice_server_with_session(command, session_id: str):
     
     try:
         # 首先检查是否已经连接到服务器
-        if "invoice_server" in global_mcp_client.connected_servers:
-            global_invoice_server_status = "✅ 发票识别服务器已连接"
+        if "document_server" in global_mcp_client.connected_servers:
+            global_invoice_server_status = "✅ 单据识别服务器已连接"
             return global_invoice_server_status
         
         # 如果未连接，尝试连接
         command_list = command.split()
-        result = global_mcp_client.connect(command_list, "invoice_server")
+        result = global_mcp_client.connect(command_list, "document_server")
         
         # 如果连接失败，尝试启动服务器
         if "❌" in result:
-            logger.info("发票识别服务器连接失败，尝试启动服务器...")
+            logger.info("单据识别服务器连接失败，尝试启动服务器...")
             try:
                 # 启动服务器
                 server_process = subprocess.Popen(
@@ -1427,20 +1426,20 @@ def connect_invoice_server_with_session(command, session_id: str):
                     stderr=subprocess.PIPE,
                     text=True
                 )
-                logger.info(f"发票识别服务器已启动，PID: {server_process.pid}")
+                logger.info(f"单据识别服务器已启动，PID: {server_process.pid}")
                 time.sleep(3)  # 等待服务器启动
                 
                 # 再次尝试连接
-                result = global_mcp_client.connect(command_list, "invoice_server")
+                result = global_mcp_client.connect(command_list, "document_server")
             except Exception as start_e:
-                logger.error(f"启动发票识别服务器失败: {start_e}")
-                global_invoice_server_status = f"❌ 连接和启动发票识别服务器都失败: {str(e)}; 启动失败: {str(start_e)}"
+                logger.error(f"启动单据识别服务器失败: {start_e}")
+                global_invoice_server_status = f"❌ 连接和启动单据识别服务器都失败: {str(e)}; 启动失败: {str(start_e)}"
                 return global_invoice_server_status
         
         global_invoice_server_status = result
         return global_invoice_server_status
     except Exception as e:
-        global_invoice_server_status = f"❌ 连接发票识别服务器失败: {str(e)}"
+        global_invoice_server_status = f"❌ 连接单据识别服务器失败: {str(e)}"
         return global_invoice_server_status
 
 def connect_datetime_server_with_session(command, session_id: str):
@@ -1827,29 +1826,30 @@ class AuditAgentApp:
                     value=global_city_server_status,
                     interactive=False
                 )
-                
                 # Invoice Server Configuration
-                gr.Markdown("### 📄 发票识别LLM服务器")
+                gr.Markdown("### 📄 单据识别LLM服务器")
                 gr.Markdown("""
                 **功能说明：**
-                - 📋 **多格式支持**: 处理图片文件（JPG、PNG等）和PDF文档
+                - 📋 **多类型单据支持**: 支持发票、收据、合同、订单、报销单等多种单据类型
+                - 🖼️ **多格式处理**: 处理图片文件（JPG、PNG等）和PDF文档
                 - 🔍 **先进OCR技术**: 使用PaddleOCR进行准确的文本提取
-                - 🤖 **AI驱动分析**: 利用大模型进行智能字段提取
-                - 🔒 **隐私保护**: 所有处理都在本地进行，确保敏感发票数据安全
+                - 🤖 **AI驱动分析**: 利用大模型进行智能字段提取，自适应识别单据字段
+                - 🔒 **隐私保护**: 所有处理都在本地进行，确保敏感单据数据安全
                 
                 **技术架构：**
                 1. **文档处理**:
                    - 🖼️ 图片：使用PaddleOCR进行OCR处理
                    - 📑 PDF：使用PyMuPDF直接提取文本
-                2. **信息提取**:
-                   - 🤖 使用大模型进行智能字段解析
-                   - ✅ 高级验证和纠正算法
+                2. **智能信息提取**:
+                   - 🤖 使用大模型进行智能字段解析，支持多种单据类型
+                   - ✅ 灵活的JSON格式输出，不严格限制字段结构
+                   - 🔄 自适应识别不同单据的关键信息
                 """)
                     
                 invoice_server_command = gr.Textbox(
                     label="服务器命令",
-                    placeholder="python mcp_invoice_stdio.py",
-                    value="python mcp_invoice_stdio.py",
+                    placeholder="python mcp_document_stdio.py",
+                    value="python mcp_document_stdio.py",
                     interactive=False
                 )
                     
@@ -2001,12 +2001,12 @@ if __name__ == "__main__":
         
         # Connect to invoice server
         try:
-            invoice_result = global_mcp_client.connect(["python", "mcp_invoice_stdio.py"], "invoice_server")
+            invoice_result = global_mcp_client.connect(["python", "mcp_document_stdio.py"], "document_server")
             global_invoice_server_status = invoice_result
-            logger.info(f"发票识别服务器连接结果: {invoice_result}")
+            logger.info(f"单据识别服务器连接结果: {invoice_result}")
         except Exception as e:
-            global_invoice_server_status = f"❌ 连接发票识别服务器失败: {str(e)}"
-            logger.error(f"连接发票识别服务器失败: {e}")
+            global_invoice_server_status = f"❌ 连接单据识别服务器失败: {str(e)}"
+            logger.error(f"连接单据识别服务器失败: {e}")
         
         # Connect to datetime server
         try:
