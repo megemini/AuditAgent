@@ -12,3 +12,4 @@ PyMuPDF
 openai
 python-docx
 dingtalk-stream
+python-dotenv

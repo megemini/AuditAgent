@@ -14,3 +14,8 @@ venv
 
 # Uploaded files
 upload_files/
+
+# Environment variables
+.env
+.env.local
+.env.*.local

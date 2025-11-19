@@ -17,7 +17,7 @@ import openai
 import logging
 import time
 
-from paddleocr import PaddleOCR, draw_ocr
+from paddleocr import PaddleOCR
 from PIL import Image
 
 # 配置日志

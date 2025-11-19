@@ -49,7 +49,7 @@ def _initialize_ocr():
     start_time = time.time()
     
     try:
-        _ocr_model = PaddleOCR(use_angle_cls=True, use_gpu=False, lang='ch')
+        _ocr_model = PaddleOCR(use_angle_cls=True, lang='ch')
         _initialized = True
         end_time = time.time()
         logger.info(f"单据OCR模型初始化完成，耗时: {end_time - start_time:.2f}秒")

@@ -15,6 +15,7 @@ import uuid
 import shutil
 import time
 from contextlib import AsyncExitStack
+from dotenv import load_dotenv
 
 # DingTalk integration
 from dingtalk_integration import (
@@ -22,7 +23,8 @@ from dingtalk_integration import (
     set_logger,
     start_dingtalk_bot,
     stop_dingtalk_bot,
-    get_dingtalk_status
+    get_dingtalk_status,
+    configure_ai_service
 )
 
 DINGTALK_AVAILABLE = is_dingtalk_available()
@@ -59,8 +61,66 @@ dingtalk_app_secret = ""
 # Set the logger for dingtalk integration
 set_logger(logger)
 
+# Load environment variables from .env file
+load_dotenv()
+
 loop = asyncio.new_event_loop()
 asyncio.set_event_loop(loop)
+
+def load_config_from_env():
+    """从.env文件中加载配置"""
+    config = {
+        "api_key_input": os.getenv("api_key_input", ""),
+        "base_url_input": os.getenv("base_url_input", "https://aistudio.baidu.com/llm/lmapi/v3"),
+        "model_input": os.getenv("model_input", "ernie-4.5-turbo-vl-preview"),
+        "dingtalk_app_key": os.getenv("dingtalk_app_key", ""),
+        "dingtalk_app_secret": os.getenv("dingtalk_app_secret", "")
+    }
+    logger.info(f"Configuration loaded from .env file: api_key={'***' if config['api_key_input'] else 'not set'}, base_url_input={'set' if config['base_url_input'] else 'not set'}, model_input={'set' if config['model_input'] else 'not set'}, dingtalk_app_key={'***' if config['dingtalk_app_key'] else 'not set'}, dingtalk_app_secret={'***' if config['dingtalk_app_secret'] else 'not set'}")
+    return config
+
+def start_dingtalk_bot_with_ai(dingtalk_app_key: str, dingtalk_app_secret: str, session_id: str) -> str:
+    """启动带AI服务的钉钉机器人，使用已有的OpenAI配置"""
+    try:
+        # 获取有效的会话ID和OpenAI配置
+        api_key = None
+        base_url = None
+        model = None
+        
+        # 首先尝试使用传入的session_id
+        if session_id and session_id in session_store:
+            api_key = os.environ.get(f"OPENAI_API_KEY_{session_id}")
+            base_url = os.environ.get(f"OPENAI_BASE_URL_{session_id}")
+            model = os.environ.get(f"OPENAI_MODEL_{session_id}")
+        
+        # 如果传入的session_id无效，尝试获取第一个有效会话
+        if not api_key or not base_url or not model:
+            for sid, session_data in session_store.items():
+                test_api_key = os.environ.get(f"OPENAI_API_KEY_{sid}")
+                test_base_url = os.environ.get(f"OPENAI_BASE_URL_{sid}")
+                test_model = os.environ.get(f"OPENAI_MODEL_{sid}")
+                
+                if test_api_key and test_base_url and test_model:
+                    api_key = test_api_key
+                    base_url = test_base_url
+                    model = test_model
+                    session_id = sid
+                    logger.info(f"Using session {sid} for DingTalk bot configuration")
+                    break
+        
+        if not api_key or not base_url or not model:
+            return "❌ 请先在 Step 1 中配置 OpenAI API 设置并确保连接成功"
+        
+        # 配置AI服务
+        configure_ai_service(api_key, base_url, model)
+        logger.info(f"AI service configured for DingTalk bot using session {session_id}")
+        
+        # 启动钉钉机器人
+        result = start_dingtalk_bot(dingtalk_app_key, dingtalk_app_secret, api_key, base_url, model)
+        return result
+    except Exception as e:
+        logger.error(f"Failed to start DingTalk bot with AI: {e}")
+        return f"❌ 启动失败: {str(e)}"
 
 def cleanup_upload_files():
     """清理upload_files文件夹中不是当天上传的文件"""
@@ -1518,6 +1578,9 @@ class AuditAgentApp:
                     self.setup_agent_tab(session_id)
     
     def setup_settings_tab(self, session_id):
+        # Load configuration from .env file
+        env_config = load_config_from_env()
+        
         with gr.Row():
             with gr.Column():
                 gr.Markdown("## OpenAI API 设置")
@@ -1525,19 +1588,20 @@ class AuditAgentApp:
                 api_key_input = gr.Textbox(
                     label="API Key",
                     placeholder="请输入您的 OpenAI API Key",
-                    type="password"
+                    type="password",
+                    value=env_config["api_key_input"]
                 )
                 
                 base_url_input = gr.Textbox(
                     label="Base URL",
                     placeholder="请输入 OpenAI API 的 Base URL (例如: https://api.openai.com/v1)",
-                    value="https://aistudio.baidu.com/llm/lmapi/v3"
+                    value=env_config["base_url_input"]
                 )
                 
                 model_input = gr.Textbox(
                     label="Model",
                     placeholder="请输入模型名称 (例如: gpt-3.5-turbo)",
-                    value="ernie-4.5-turbo-vl-preview"
+                    value=env_config["model_input"]
                 )
                 
                 test_connection_btn = gr.Button("测试连接", variant="primary")
@@ -1561,32 +1625,49 @@ class AuditAgentApp:
             
             with gr.Row():
                 with gr.Column(scale=1):
+                    gr.Markdown("### 🔧 钉钉机器人配置")
                     dingtalk_app_key = gr.Textbox(
                         label="钉钉 App Key",
                         placeholder="请输入您的钉钉 App Key",
-                        type="password"
+                        type="password",
+                        value=env_config["dingtalk_app_key"]
                     )
                     
                     dingtalk_app_secret = gr.Textbox(
-                        label="钉钉 App Secret", 
+                        label="钉钉 App Secret",
                         placeholder="请输入您的钉钉 App Secret",
-                        type="password"
+                        type="password",
+                        value=env_config["dingtalk_app_secret"]
+                    )
+                    
+                    gr.Markdown("### 🤖 AI集成说明")
+                    gr.Markdown("✅ 机器人将自动使用 **Step 1** 中配置的 OpenAI API 设置进行智能分析")
+                    gr.Markdown("📋 支持功能：")
+                    gr.Markdown("• 📝 文本消息的AI分析")
+                    gr.Markdown("• 🖼️ 图片消息的智能识别（发票、文档等）")
+                    
+                    # 隐藏的会话ID输入，用于传递当前会话
+                    current_session = list(session_store.keys())[0] if session_store else ""
+                    session_id_input = gr.Textbox(
+                        value=current_session,
+                        visible=False
                     )
                     
                     with gr.Row():
-                        dingtalk_start_btn = gr.Button("启动机器人", variant="primary")
-                        dingtalk_stop_btn = gr.Button("停止机器人", variant="secondary")
+                        dingtalk_start_btn = gr.Button("🚀 启动机器人", variant="primary")
+                        dingtalk_stop_btn = gr.Button("⏹️ 停止机器人", variant="secondary")
                     
                     dingtalk_status = gr.Textbox(
                         label="机器人状态",
                         value=dingtalk_bot_status,
-                        interactive=False
+                        interactive=False,
+                        lines=3
                     )
             
-            # Set up event handlers for DingTalk bot
+            # Set up event handlers for DingTalk bot with AI integration
             dingtalk_start_btn.click(
-                fn=start_dingtalk_bot,
-                inputs=[dingtalk_app_key, dingtalk_app_secret],
+                fn=start_dingtalk_bot_with_ai,
+                inputs=[dingtalk_app_key, dingtalk_app_secret, session_id_input],
                 outputs=dingtalk_status
             )
             
