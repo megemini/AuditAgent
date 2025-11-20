@@ -339,7 +339,18 @@ class DingTalkSimpleHandler(dingtalk_stream.ChatbotHandler):
                                             if "verification_results" in doc_data:
                                                 formatted_result += "✅ 规则验证：\n"
                                                 verification_results = doc_data["verification_results"]
-                                                if isinstance(verification_results, dict):
+                                                if isinstance(verification_results, list):
+                                                    for item in verification_results:
+                                                        if isinstance(item, dict):
+                                                            rule_name = item.get("rule_name", "未知规则")
+                                                            verification_result = item.get("verification_result", "")
+                                                            detail = item.get("detail", "")
+                                                            formatted_result += f"  • {rule_name}: {verification_result}\n"
+                                                            if detail:
+                                                                formatted_result += f"    └─ {detail}\n"
+                                                        else:
+                                                            formatted_result += f"  • {item}\n"
+                                                elif isinstance(verification_results, dict):
                                                     for rule, result in verification_results.items():
                                                         formatted_result += f"  • {rule}: {result}\n"
                                                 else:
