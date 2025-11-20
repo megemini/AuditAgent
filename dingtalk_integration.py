@@ -78,7 +78,8 @@ class AIServiceClient:
                 self.logger.error(f"Failed to configure AI services: {e}")
             return False
     
-    async def analyze_document(self, image_url: str = None, image_data: str = None, user_text: str = "") -> Dict[str, Any]:
+    async def analyze_document(self, image_url: str = None, image_data: str = None, user_text: str = "", 
+                             reimbursement_rules: list = None) -> Dict[str, Any]:
         """分析文档 - 直接调用mcp_document_stdio中的函数"""
         if not self.connected:
             return {"success": False, "message": "AI服务未初始化"}
@@ -132,7 +133,8 @@ class AIServiceClient:
                     ai_service_config["api_key"],
                     ai_service_config["base_url"],
                     ai_service_config["model"],
-                    image_url=image_url
+                    image_url=image_url,
+                    reimbursement_rules=reimbursement_rules
                 )
                 
                 # 清理临时文件
@@ -179,7 +181,7 @@ class AIServiceClient:
 class DingTalkSimpleHandler(dingtalk_stream.ChatbotHandler):
     """钉钉消息处理器，支持文本和图片消息，集成AI分析功能"""
     
-    def __init__(self, logger: Optional[logging.Logger] = None, ai_client: Optional[AIServiceClient] = None):
+    def __init__(self, logger: Optional[logging.Logger] = None, ai_client: Optional[AIServiceClient] = None, session_id: str = None, session_store_ref: Optional[Dict] = None):
         # Initialize the parent class
         try:
             super(dingtalk_stream.ChatbotHandler, self).__init__()
@@ -188,6 +190,8 @@ class DingTalkSimpleHandler(dingtalk_stream.ChatbotHandler):
             pass
         self.logger = logger
         self.ai_client = ai_client
+        self.session_id = session_id
+        self.session_store_ref = session_store_ref or {}
         self.loop = None
     
     async def process(self, callback: dingtalk_stream.CallbackMessage):
@@ -264,25 +268,104 @@ class DingTalkSimpleHandler(dingtalk_stream.ChatbotHandler):
                                 if self.logger:
                                     self.logger.info("AI client available, starting document analysis...")
                                 try:
-                                    # 使用文档分析
+                                    # 使用文档分析 - 从session中获取报销规则
                                     if self.logger:
                                         self.logger.info(f"Calling analyze_document with image_url: {download_url[:50]}...")
-                                    doc_result = await self.ai_client.analyze_document(image_url=download_url)
+                                    
+                                    # 从session中获取reimbursement_rules
+                                    reimbursement_rules = []
+                                    try:
+                                        # 使用传入的session_store引用获取报销规则
+                                        if self.session_id:
+                                            session_data = self.session_store_ref.get(self.session_id, {})
+                                            reimbursement_rules = session_data.get("reimbursement_rules", [])
+                                            if reimbursement_rules and self.logger:
+                                                self.logger.info(f"Found reimbursement rules in session {self.session_id}: {len(reimbursement_rules)} rules")
+                                            elif self.logger:
+                                                self.logger.debug(f"No reimbursement rules found in session {self.session_id}, will use default rules")
+                                        elif self.logger:
+                                            self.logger.debug(f"Session {self.session_id} not found in session_store_ref, will use default rules")
+                                        elif self.logger:
+                                            self.logger.debug("No session_id provided, will use default rules")
+                                        
+                                        if not reimbursement_rules:
+                                            # 如果session中没有规则，使用默认规则
+                                            reimbursement_rules = [
+                                                "发票必须为真实有效的增值税发票",
+                                                "发票金额必须在合理范围内",
+                                                "发票日期必须在报销有效期内",
+                                                "发票内容必须与实际业务相符"
+                                            ]
+                                            if self.logger:
+                                                self.logger.info("Using default reimbursement rules")
+                                        
+                                    except Exception as e:
+                                        # 如果获取规则失败，使用默认规则
+                                        reimbursement_rules = [
+                                            "发票必须为真实有效的增值税发票",
+                                            "发票金额必须在合理范围内",
+                                            "发票日期必须在报销有效期内",
+                                            "发票内容必须与实际业务相符"
+                                        ]
+                                        if self.logger:
+                                            self.logger.warning(f"Failed to get reimbursement rules: {e}, using default rules")
+                                    
+                                    doc_result = await self.ai_client.analyze_document(
+                                        image_url=download_url, 
+                                        reimbursement_rules=reimbursement_rules
+                                    )
+                                    
                                     if self.logger:
                                         self.logger.info(f"Document analysis result: {doc_result}")
                                     
                                     if doc_result.get("success"):
                                         doc_data = doc_result.get("document_data", {})
                                         if isinstance(doc_data, dict):
-                                            formatted_result = "📄 文档识别结果：\n\n"
-                                            for key, value in doc_data.items():
-                                                if key != "document_type":
-                                                    formatted_result += f"📋 {key}: {value}\n"
+                                            # 格式化财务审核结果
+                                            formatted_result = "🔍 财务审核结果：\n\n"
+                                            
+                                            # 添加提取的关键信息
+                                            if "extracted_info" in doc_data:
+                                                formatted_result += "📋 提取信息：\n"
+                                                extracted_info = doc_data["extracted_info"]
+                                                if isinstance(extracted_info, dict):
+                                                    for key, value in extracted_info.items():
+                                                        formatted_result += f"  • {key}: {value}\n"
+                                                else:
+                                                    formatted_result += f"  • {extracted_info}\n"
+                                                formatted_result += "\n"
+                                            
+                                            # 添加验证结果
+                                            if "verification_results" in doc_data:
+                                                formatted_result += "✅ 规则验证：\n"
+                                                verification_results = doc_data["verification_results"]
+                                                if isinstance(verification_results, dict):
+                                                    for rule, result in verification_results.items():
+                                                        formatted_result += f"  • {rule}: {result}\n"
+                                                else:
+                                                    formatted_result += f"  • {verification_results}\n"
+                                                formatted_result += "\n"
+                                            
+                                            # 添加审核结论
+                                            if "audit_conclusion" in doc_data:
+                                                formatted_result += "📝 审核结论：\n"
+                                                formatted_result += f"  • {doc_data['audit_conclusion']}\n\n"
+                                            
+                                            # 添加改进建议
+                                            if "suggestions" in doc_data:
+                                                formatted_result += "💡 改进建议：\n"
+                                                suggestions = doc_data["suggestions"]
+                                                if isinstance(suggestions, list):
+                                                    for suggestion in suggestions:
+                                                        formatted_result += f"  • {suggestion}\n"
+                                                else:
+                                                    formatted_result += f"  • {suggestions}\n"
+                                            
                                             reply_message = formatted_result
                                         else:
-                                            reply_message = f"📄 文档识别结果：\n{doc_data}"
+                                            reply_message = f"📄 财务审核结果：\n{doc_data}"
                                     else:
-                                        reply_message = f"❌ 图片分析失败：{doc_result.get('message', '未知错误')}"
+                                        reply_message = f"❌ 财务审核失败：{doc_result.get('message', '未知错误')}"
                                 except Exception as e:
                                     if self.logger:
                                         self.logger.error(f"AI image analysis error: {e}", exc_info=True)
@@ -338,10 +421,8 @@ class DingTalkSimpleHandler(dingtalk_stream.ChatbotHandler):
         except Exception as e:
             if self.logger:
                 self.logger.error(f"Error processing DingTalk message: {e}")
-            return AckMessage.STATUS_OK, 'OK'
-
 def start_dingtalk_bot(app_key: str, app_secret: str,
-                      api_key: Optional[str] = None, base_url: Optional[str] = None, model: Optional[str] = None) -> str:
+                      api_key: Optional[str] = None, base_url: Optional[str] = None, model: Optional[str] = None, session_id: str = None, session_store: dict = None) -> str:
     """Start DingTalk bot in a separate thread with AI service integration"""
     global dingtalk_bot_thread, dingtalk_bot_status, dingtalk_app_key, dingtalk_app_secret
     
@@ -357,7 +438,12 @@ def start_dingtalk_bot(app_key: str, app_secret: str,
         dingtalk_app_key = app_key
         dingtalk_app_secret = app_secret
         
-        # Use a threading.Event to signal when the bot has started
+        # Use session_store passed as parameter
+        session_store_ref = session_store if session_store is not None else {}
+        if logger and session_store is None:
+            logger.warning("No session_store provided, using empty reference")
+        
+        # Use a threading.Event to signal when as bot has started
         startup_complete = threading.Event()
         final_status = [None]  # Use a list to store the final status
         
@@ -398,15 +484,15 @@ def start_dingtalk_bot(app_key: str, app_secret: str,
                 credential = dingtalk_stream.Credential(app_key, app_secret)
                 client = dingtalk_stream.DingTalkStreamClient(credential)
                 
-                # Create handler instance with logger and AI client
-                handler = DingTalkSimpleHandler(logger, ai_client)
+                # Create handler instance with logger, AI client, session_id and session_store reference
+                handler = DingTalkSimpleHandler(logger, ai_client, session_id, session_store_ref)
                 client.register_callback_handler(
                     dingtalk_stream.chatbot.ChatbotMessage.TOPIC,
                     handler
                 )
                 
                 dingtalk_bot_status = "✅ DingTalk 机器人已启动" + (" (AI集成已启用)" if ai_client else " (无AI集成)")
-                final_status[0] = dingtalk_bot_status  # Store the final status
+                final_status[0] = dingtalk_bot_status  # Store final status
                 if logger:
                     logger.info(f"DingTalk bot started successfully with AI: {'enabled' if ai_client else 'disabled'}")
                 
@@ -422,7 +508,7 @@ def start_dingtalk_bot(app_key: str, app_secret: str,
                 if logger:
                     logger.error(f"Failed to start DingTalk bot: {e}")
         
-        # Start the bot in a daemon thread
+        # Start bot in a daemon thread
         dingtalk_bot_thread = threading.Thread(target=run_dingtalk_bot, daemon=True)
         dingtalk_bot_thread.start()
         

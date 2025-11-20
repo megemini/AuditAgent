@@ -97,9 +97,9 @@ def extract_text_with_ocr(image_source):
     """
     return ocr_manager.extract_text(image_source, lang='ch')
 
-def analyze_document_with_ai(ocr_text, user_text, api_key, base_url, model, image_url=None):
+def analyze_document_with_ai(ocr_text, user_text, api_key, base_url, model, image_url=None, reimbursement_rules=None):
     """
-    使用 AI 分析单据内容，输出灵活的 JSON 格式
+    使用 AI 分析单据内容，进行财务审核并返回审核意见
     
     Args:
         ocr_text: OCR 提取的文字列表
@@ -108,6 +108,7 @@ def analyze_document_with_ai(ocr_text, user_text, api_key, base_url, model, imag
         base_url: OpenAI API基础URL
         model: OpenAI模型名称
         image_url: 图像URL，用于多模态模型输入
+        reimbursement_rules: 财务报销规则列表
     
     Returns:
         AI 分析结果 (JSON格式)
@@ -118,32 +119,79 @@ def analyze_document_with_ai(ocr_text, user_text, api_key, base_url, model, imag
     # 合并OCR文本和用户文本
     ocr_content = "\n".join(ocr_text) if ocr_text else ""
     
-    # 构建灵活的分析提示，不严格限制JSON格式
+    # 构建报销规则上下文
+    rules_context = ""
+    if reimbursement_rules:
+        rules_context = "\n".join([f"{i+1}. {rule}" for i, rule in enumerate(reimbursement_rules)])
+    else:
+        rules_context = "未提供具体的财务报销规则"
+    
+    # 构建财务审核提示
     prompt = f"""
-请分析以下单据内容，提取并识别其中的关键信息。这是一个灵活的单据识别任务，单据类型可能包括但不限于：发票、收据、合同、订单、报销单等。
+你是一个财务报销专家，请基于以下财务报销规则对用户的问题进行详细分析和审核。
 
-OCR识别的文字内容：
+财务报销规则：
+{rules_context}
+
+用户问题：{user_text}
+
+**重要：如果用户上传了单据或要求审核单据，请按以下步骤进行逐条验证的审核流程：**
+
+**第一步：单据识别**
+- 使用 recognize_document 工具识别单据信息
+- 提取单据的关键信息：金额、日期、城市、类型等
+- 该工具支持多种单据类型：发票、收据、合同、订单、报销单等
+- 支持灵活的 JSON 格式输出，不严格限制字段结构
+
+**第二步：逐条规则验证**
+- **一次只验证一条规则，按顺序进行**
+- **每条规则验证时，如果需要额外信息，就调用相应的MCP工具**
+- **验证完一条规则后，立即给出该规则的验证结果**
+- **然后继续验证下一条规则**
+
+**验证流程示例**：
+```
+正在验证规则1：[规则名称]
+→ 需要获取当前时间 → 调用 get_current_time 工具
+→ 验证结果：✅ 符合 / ❌ 不符合 / ⚠️ 需注意
+→ 详细说明：[具体验证过程和结果]
+
+正在验证规则2：[规则名称]
+→ 需要查询城市分级 → 调用 query_city_tier 工具
+→ 验证结果：✅ 符合 / ❌ 不符合 / ⚠️ 需注意
+→ 详细说明：[具体验证过程和结果]
+
+... 继续验证其他规则
+```
+
+**第三步：汇总审核结果**
+- 只有在所有规则都验证完成后，才生成最终的审核报告
+- 统计所有规则的验证结果
+- 给出最终结论和改进建议
+
+**重要原则**：
+- 🔄 **逐条进行**：一次只验证一条规则，不要批量处理
+- 🛠️ **按需调用工具**：只有当验证某条规则需要额外信息时，才调用相应工具
+- 📝 **即时反馈**：每验证完一条规则，立即给出该规则的结果
+- 🎯 **最后汇总**：所有规则验证完成后，再生成最终的审核报告
+- ✅ **不中断流程**：即使某条规则不符合，也要继续验证其他规则
+
+**可用的MCP工具**（按需调用）：
+- recognize_document: 识别单据信息（支持发票、收据、合同、订单等多种单据类型）
+- get_current_time: 获取当前时间（用于时间相关规则验证）
+- query_city_tier: 查询单个城市分级（用于城市标准相关规则验证）
+- query_multiple_cities: 批量查询多个城市分级
+- get_cities_by_tier: 获取指定分级的所有城市
+
+OCR识别的单据内容：
 {ocr_content}
 
-用户提供的补充信息：
-{user_text if user_text else "无"}
-
-请根据单据的实际内容，灵活提取相关字段，并以JSON格式返回。不要被固定的字段模板限制，根据单据类型返回相应的结构化数据。
-
-例如：
-- 如果是发票，可能包含：发票号码、金额、日期、买卖双方信息等
-- 如果是收据，可能包含：收款金额、收款事由、日期、付款方等
-- 如果是合同，可能包含：合同编号、签订日期、合同金额、双方信息等
-- 如果是订单，可能包含：订单号、商品信息、金额、日期等
-
-请返回清晰、有意义的JSON数据，字段名称要能够明确表达其含义。如果某些信息无法识别或不存在，请不要包含该字段或设为null。
-
-返回格式要求：
-1. 必须是有效的JSON格式
-2. 字段名称要清晰明确，字段名称要使用中文
-3. 数值类型要保持正确（数字不要加引号）
-4. 日期格式建议使用标准格式（如YYYY-MM-DD）
-5. 包含一个"document_type"字段，说明识别的单据类型
+请基于以上信息进行财务审核，并返回详细的审核意见。返回格式应为JSON，包含以下字段：
+- document_type: 单据类型
+- extracted_info: 提取的关键信息
+- verification_results: 每条规则的验证结果
+- audit_conclusion: 审核结论
+- suggestions: 改进建议
 """
     
     logger.info(f"生成的prompt长度: {len(prompt)}字符")
@@ -236,9 +284,10 @@ OCR识别的文字内容：
 
 @mcp.tool()
 def recognize_document(image_url: str = None, image_data: str = None, user_text: str = "",
-                     api_key: str = None, base_url: str = None, model: str = None) -> dict:
+                     api_key: str = None, base_url: str = None, model: str = None, 
+                     reimbursement_rules: list = None) -> dict:
     """
-    识别单张单据图像
+    识别单张单据图像并进行财务审核
     
     Args:
         image_url: 图像的 URL
@@ -247,9 +296,10 @@ def recognize_document(image_url: str = None, image_data: str = None, user_text:
         api_key: OpenAI API密钥
         base_url: OpenAI API基础URL
         model: OpenAI模型名称
+        reimbursement_rules: 财务报销规则列表
     
     Returns:
-        单据识别结果
+        单据识别和审核结果
     """
     logger.info("开始单张单据识别...")
     recognize_start_time = time.time()
@@ -259,7 +309,8 @@ def recognize_document(image_url: str = None, image_data: str = None, user_text:
                f"user_text={'提供' if user_text else '未提供'}, "
                f"api_key={'提供' if api_key else '未提供'}, "
                f"base_url={'提供' if base_url else '未提供'}, "
-               f"model={'提供' if model else '未提供'}")
+               f"model={'提供' if model else '未提供'}, "
+               f"reimbursement_rules={'提供' if reimbursement_rules else '未提供'}")
     
     try:
         # 检查必需参数
@@ -312,7 +363,15 @@ def recognize_document(image_url: str = None, image_data: str = None, user_text:
         
         # 使用AI分析单据内容
         logger.info("开始AI分析单据内容...")
-        analysis_result = analyze_document_with_ai(ocr_text, user_text, api_key, base_url, model)
+        analysis_result = analyze_document_with_ai(
+            ocr_text, 
+            user_text, 
+            api_key, 
+            base_url, 
+            model, 
+            image_url=image_url,
+            reimbursement_rules=reimbursement_rules
+        )
         
         # 清理临时文件
         if image_url and os.path.exists(tmp_file_path):

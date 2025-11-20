@@ -87,12 +87,15 @@ def start_dingtalk_bot_with_ai(dingtalk_app_key: str, dingtalk_app_secret: str, 
         api_key = None
         base_url = None
         model = None
+        valid_session_id = None
         
         # 首先尝试使用传入的session_id
-        if session_id and session_id in session_store:
+        if session_id and session_id.strip() and session_id in session_store:
             api_key = os.environ.get(f"OPENAI_API_KEY_{session_id}")
             base_url = os.environ.get(f"OPENAI_BASE_URL_{session_id}")
             model = os.environ.get(f"OPENAI_MODEL_{session_id}")
+            if api_key and base_url and model:
+                valid_session_id = session_id
         
         # 如果传入的session_id无效，尝试获取第一个有效会话
         if not api_key or not base_url or not model:
@@ -105,19 +108,19 @@ def start_dingtalk_bot_with_ai(dingtalk_app_key: str, dingtalk_app_secret: str, 
                     api_key = test_api_key
                     base_url = test_base_url
                     model = test_model
-                    session_id = sid
+                    valid_session_id = sid
                     logger.info(f"Using session {sid} for DingTalk bot configuration")
                     break
         
-        if not api_key or not base_url or not model:
+        if not api_key or not base_url or not model or not valid_session_id:
             return "❌ 请先在 Step 1 中配置 OpenAI API 设置并确保连接成功"
         
         # 配置AI服务
         configure_ai_service(api_key, base_url, model)
-        logger.info(f"AI service configured for DingTalk bot using session {session_id}")
+        logger.info(f"AI service configured for DingTalk bot using session {valid_session_id}")
         
-        # 启动钉钉机器人
-        result = start_dingtalk_bot(dingtalk_app_key, dingtalk_app_secret, api_key, base_url, model)
+        # 启动钉钉机器人，传递有效的session_id参数
+        result = start_dingtalk_bot(dingtalk_app_key, dingtalk_app_secret, api_key, base_url, model, valid_session_id, session_store)
         return result
     except Exception as e:
         logger.error(f"Failed to start DingTalk bot with AI: {e}")
@@ -1647,13 +1650,6 @@ class AuditAgentApp:
                     gr.Markdown("• 📝 文本消息的AI分析")
                     gr.Markdown("• 🖼️ 图片消息的智能识别（发票、文档等）")
                     
-                    # 隐藏的会话ID输入，用于传递当前会话
-                    current_session = list(session_store.keys())[0] if session_store else ""
-                    session_id_input = gr.Textbox(
-                        value=current_session,
-                        visible=False
-                    )
-                    
                     with gr.Row():
                         dingtalk_start_btn = gr.Button("🚀 启动机器人", variant="primary")
                         dingtalk_stop_btn = gr.Button("⏹️ 停止机器人", variant="secondary")
@@ -1668,7 +1664,7 @@ class AuditAgentApp:
             # Set up event handlers for DingTalk bot with AI integration
             dingtalk_start_btn.click(
                 fn=start_dingtalk_bot_with_ai,
-                inputs=[dingtalk_app_key, dingtalk_app_secret, session_id_input],
+                inputs=[dingtalk_app_key, dingtalk_app_secret, session_id],
                 outputs=dingtalk_status
             )
             
