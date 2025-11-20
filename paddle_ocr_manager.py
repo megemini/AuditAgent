@@ -70,15 +70,13 @@ class PaddleOCRManager:
         try:
             model = self._ocr_models[lang]
             
-            # 执行OCR（使用predict方法）
-            result = model.predict(image_source)
-            
-            # 提取文本 - predict返回的是列表，取第一个元素
-            if isinstance(result, list) and len(result) > 0:
-                result = result[0]
+            result = model.ocr(image_source)[0]
 
-            txts = result['rec_texts']
-            scores = result['rec_scores']
+            logger.info('>'*10)
+            logger.info(result)
+            
+            txts = [line[1][0] for line in result]
+            scores = [line[1][1] for line in result]
             
             ocr_end_time = time.time()
             logger.info(f"OCR 文字提取完成，耗时: {ocr_end_time - ocr_start_time:.2f}秒")

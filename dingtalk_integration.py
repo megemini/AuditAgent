@@ -127,11 +127,12 @@ class AIServiceClient:
                 if self.logger:
                     self.logger.info("开始AI分析单据内容...")
                 analysis_result = analyze_document_with_ai(
-                    ocr_text, 
-                    user_text, 
-                    ai_service_config["api_key"], 
-                    ai_service_config["base_url"], 
-                    ai_service_config["model"]
+                    ocr_text,
+                    user_text,
+                    ai_service_config["api_key"],
+                    ai_service_config["base_url"],
+                    ai_service_config["model"],
+                    image_url=image_url
                 )
                 
                 # 清理临时文件

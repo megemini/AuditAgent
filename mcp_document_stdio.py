@@ -97,7 +97,7 @@ def extract_text_with_ocr(image_source):
     """
     return ocr_manager.extract_text(image_source, lang='ch')
 
-def analyze_document_with_ai(ocr_text, user_text, api_key, base_url, model):
+def analyze_document_with_ai(ocr_text, user_text, api_key, base_url, model, image_url=None):
     """
     使用 AI 分析单据内容，输出灵活的 JSON 格式
     
@@ -107,6 +107,7 @@ def analyze_document_with_ai(ocr_text, user_text, api_key, base_url, model):
         api_key: OpenAI API密钥
         base_url: OpenAI API基础URL
         model: OpenAI模型名称
+        image_url: 图像URL，用于多模态模型输入
     
     Returns:
         AI 分析结果 (JSON格式)
@@ -157,9 +158,35 @@ OCR识别的文字内容：
         logger.info("OpenAI客户端创建成功")
         
         # Prepare the messages for OpenAI API
-        messages = [
-            {"role": "user", "content": prompt}
-        ]
+        messages = []
+        
+        # If image_url is provided, use multimodal input
+        if image_url:
+            logger.info("使用多模态输入，包含图像URL")
+            # For multimodal models, we need to use a different message structure
+            messages = [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": prompt
+                        },
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": image_url
+                            }
+                        }
+                    ]
+                }
+            ]
+        else:
+            # Text-only input
+            messages = [
+                {"role": "user", "content": prompt}
+            ]
+        
         logger.info("准备调用OpenAI API...")
         
         # Make API call to OpenAI
