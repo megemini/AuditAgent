@@ -13,3 +13,4 @@ openai
 python-docx
 dingtalk-stream
 python-dotenv
+langchain

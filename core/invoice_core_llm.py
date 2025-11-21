@@ -1,7 +1,7 @@
 """
-发票OCR识别核心模块 (使用OpenAI API)
+发票OCR识别核心模块 (使用LangChain和OpenAI API)
 包含inference函数和相关工具函数，不包含模型初始化和Gradio界面
-使用OpenAI API而不是本地模型
+使用LangChain管理AI服务和会话历史
 """
 
 import atexit
@@ -13,9 +13,17 @@ import fitz  # PyMuPDF
 import openai
 import logging
 import time
+import asyncio
 
 from paddle_ocr_manager import get_ocr_manager
 from PIL import Image
+
+try:
+    from core import ai_manager, SessionConfig
+    LANGCHAIN_AVAILABLE = True
+except ImportError:
+    LANGCHAIN_AVAILABLE = False
+    logger.warning("LangChain not available. Using legacy OpenAI client.")
 
 # 配置日志
 logging.basicConfig(

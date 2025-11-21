@@ -3,6 +3,7 @@
 单据识别LLM MCP Server (stdio版本)
 使用 FastMCP 和 stdio 协议
 支持多种单据类型的灵活识别
+集成LangChain进行AI服务管理
 """
 
 import base64
@@ -18,6 +19,13 @@ import openai
 import json
 from PIL import Image
 import numpy as np
+
+try:
+    from core import ai_manager, SessionConfig
+    LANGCHAIN_AVAILABLE = True
+except ImportError:
+    LANGCHAIN_AVAILABLE = False
+    logging.warning("LangChain not available. Using legacy OpenAI client.")
 
 # 配置日志
 logging.basicConfig(

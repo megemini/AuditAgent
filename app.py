@@ -17,8 +17,16 @@ import time
 from contextlib import AsyncExitStack
 from dotenv import load_dotenv
 
+# Add langchain imports
+try:
+    from core import ai_manager, SessionConfig
+    LANGCHAIN_AVAILABLE = True
+except ImportError:
+    LANGCHAIN_AVAILABLE = False
+    logger.warning("LangChain not available. AI functionality will be limited.")
+
 # DingTalk integration
-from dingtalk_integration import (
+from core.dingtalk_integration import (
     is_dingtalk_available,
     set_logger,
     start_dingtalk_bot,
@@ -751,10 +759,12 @@ async def _process_query_with_tools_streaming(question, history, session_id: str
             for call in assistant_msg.tool_calls:
                 tool_name = call.function.name
                 tool_args = json.loads(call.function.arguments)
+                logger.info(f"处理工具调用: {tool_name}, 参数: {list(tool_args.keys())}")
 
                 # Track if invoice recognition tool was called
-                if tool_name == "recognize_single_invoice":
+                if tool_name == "recognize_document" or tool_name == "recognize_single_invoice":
                     invoice_recognized = True
+                    logger.info(f"检测到单据识别工具被调用: {tool_name}")
 
                 # Add tool call message to history and yield
                 current_history.append({
@@ -1251,9 +1261,10 @@ async def _prepare_main_message(question, file_upload, session_id: str, rules_co
                     pdf_document.close()
 
                     # Add text content with PDF processing instructions
+                    # 关键改进：直接指示立即调用工具处理PDF
                     message_content.append({
                         "type": "text",
-                        "text": f"{base_prompt}\n\n请注意：用户已上传了一个PDF文件，文件内容如下：\n\n{pdf_text}\n\n如果PDF中包含单据信息，请使用 recognize_document 工具来识别单据信息。该工具支持多种单据类型（发票、收据、合同、订单、报销单等），并能灵活识别其中的内容。请将PDF中的单据内容完整提取出来。\n\n请使用 recognize_document 工具，该工具接受以下参数：\n- image_data: base64编码的图片数据\n- user_text: 用户提供的补充文字信息（可选）\n\n已准备好base64编码的PDF数据，可以直接使用。"
+                        "text": f"{base_prompt}\n\n⚠️ 重要指示：用户已上传了一个PDF文件。文件内容摘要如下：\n\n{pdf_text[:2000]}{'...' if len(pdf_text) > 2000 else ''}\n\n你现在必须立即执行以下步骤：\n\n**立即调用 recognize_document 工具**\n使用以下参数调用该工具：\n```\nrecognize_document(\n  image_data=\"{file_base64[:100]}...\",  # base64编码的完整PDF数据已准备好\n  user_text=\"{question}\"\n)\n```\n\n该工具接受以下参数：\n- image_data: base64编码的PDF数据（已准备好，包含完整的{len(file_base64)}字符的base64数据）\n- user_text: 用户的问题或补充说明（{question}）\n\n请立即使用这些参数调用 recognize_document 工具来识别PDF中的单据信息。该工具支持多种单据类型（发票、收据、合同、订单、报销单等），并能灵活识别其中的内容。获取工具返回的结果后，再按照第二步和第三步进行逐条规则验证和最终汇总。"
                     })
 
                     # Store base64 data for tool usage
@@ -1264,7 +1275,7 @@ async def _prepare_main_message(question, file_upload, session_id: str, rules_co
                     logger.error(f"Error processing PDF: {e}")
                     message_content.append({
                         "type": "text",
-                        "text": f"{base_prompt}\n\n请注意：用户上传了一个PDF文件，但在处理文件时出错：{str(e)}"
+                        "text": f"{base_prompt}\n\n❌ 错误：用户上传了一个PDF文件，但在处理文件时出错：{str(e)}。请提示用户检查文件格式或重新上传。"
                     })
             else:
                 # Process image file
@@ -1282,9 +1293,10 @@ async def _prepare_main_message(question, file_upload, session_id: str, rules_co
                 data_url = f"data:{mime_type};base64,{file_base64}"
 
                 # Add text content with image processing instructions
+                # 关键改进：直接指示立即调用工具，而不是描述可用参数
                 message_content.append({
                     "type": "text",
-                    "text": f"{base_prompt}\n\n请注意：用户已上传了一张图片，请使用 recognize_document 工具来识别图片中的单据信息。该工具支持多种单据类型（发票、收据、合同、订单、报销单等），并能灵活识别其中的内容。请将图片中的单据内容完整提取出来。\n\n请使用 recognize_document 工具，该工具接受以下参数：\n- image_data: base64编码的图片数据\n- user_text: 用户提供的补充文字信息（可选）\n\n已准备好base64编码的图片数据，可以直接使用。"
+                    "text": f"{base_prompt}\n\n⚠️ 重要指示：用户已上传了一张图片。你现在必须立即执行以下步骤：\n\n**立即调用 recognize_document 工具**\n使用以下参数调用该工具：\n```\nrecognize_document(\n  image_data=\"{file_base64[:100]}...\",  # base64编码的完整图片数据已准备好\n  user_text=\"{question}\"\n)\n```\n\n该工具接受以下参数：\n- image_data: base64编码的图片数据（已准备好，包含完整的{len(file_base64)}字符的base64数据）\n- user_text: 用户的问题或补充说明（{question}）\n\n请立即使用这些参数调用 recognize_document 工具来识别图片中的单据信息。该工具支持多种单据类型（发票、收据、合同、订单、报销单等），并能灵活识别其中的内容。获取工具返回的结果后，再按照第二步和第三步进行逐条规则验证和最终汇总。"
                 })
 
                 # Add image content
@@ -1313,9 +1325,12 @@ async def _prepare_main_message(question, file_upload, session_id: str, rules_co
 async def _execute_tool(tool_name: str, tool_args: dict, session_id: str, mcp_client):
     """Execute a single tool and return the result"""
     try:
+        logger.info(f"🔧 执行工具: {tool_name}")
+        logger.info(f"   工具参数: {list(tool_args.keys())}")
+        
         # Special handling for document recognition tool
         if tool_name == "recognize_document":
-            logger.info(f"处理单据识别工具参数: {tool_args}")
+            logger.info(f"⚙️ 处理单据识别工具参数: {list(tool_args.keys())}")
 
             # Get OpenAI configuration from session
             session_data = session_store.get(session_id, {})
