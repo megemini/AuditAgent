@@ -1,7 +1,7 @@
 ---
 domain: multi-modal
 tags:
-- financial reimbursement
+- document review
 - intelligent audit
 - invoice recognition
 - large language model
@@ -27,12 +27,12 @@ license: Apache License 2.0
 
 ## 📋 Project Overview
 
-The Financial Reimbursement Intelligent Agent is an AI-powered assistant based on large language models, designed to help enterprise employees quickly understand financial reimbursement policies, audit reimbursement materials, and improve reimbursement efficiency. The system integrates various advanced technologies including natural language processing, optical character recognition (OCR), Model Context Protocol (MCP), and more, providing comprehensive financial reimbursement services to users.
+The Document Review Intelligent Agent is an AI-powered assistant based on large language models, designed to help enterprise employees quickly understand document review policies, audit document materials, and improve review efficiency. The system integrates various advanced technologies including natural language processing, optical character recognition (OCR), Model Context Protocol (MCP), and more, providing comprehensive document review services to users.
 
 ### 🎯 Core Features
 
-1. **Intelligent Rule Extraction**: Automatically extract financial reimbursement rules from various document formats (PDF, Word, TXT)
-2. **Intelligent Invoice Recognition**: Use advanced OCR technology and large language models to recognize invoice information
+1. **Intelligent Rule Extraction**: Automatically extract document review rules from various document formats (PDF, Word, TXT)
+2. **Intelligent Document Recognition**: Use advanced OCR technology and large language models to recognize document information
 3. **Intelligent Audit Process**: Validate and audit invoices based on extracted rules with step-by-step verification
 4. **Multi-tool Collaboration**: Integrate multiple MCP servers providing professional functions such as city tier queries, date-time calculations
 5. **Streaming Interaction**: Support real-time streaming output for a smooth user experience
@@ -124,9 +124,9 @@ The Financial Reimbursement Intelligent Agent is an AI-powered assistant based o
 
 ### 1. Intelligent Rule Extraction
 - **Multi-format Support**: Supports TXT, PDF, DOCX, DOC and other document formats
-- **Automatic Parsing**: Uses large language models to automatically identify and extract reimbursement rules
+- **Automatic Parsing**: Uses large language models to automatically identify and extract review rules
 - **Structured Output**: Converts rules to JSON format for easy subsequent processing
-- **Built-in Examples**: Provides complete financial reimbursement rule examples
+- **Built-in Examples**: Provides complete document review rule examples
 
 ### 2. Intelligent Invoice Recognition
 - **Multi-format Processing**: Supports image files (JPG, PNG, etc.) and PDF documents
@@ -135,7 +135,7 @@ The Financial Reimbursement Intelligent Agent is an AI-powered assistant based o
 - **Privacy Protection**: All processing is done locally to ensure data security
 
 ### 3. Intelligent Audit Process
-- **Step-by-step Validation**: Systematically validates each reimbursement rule one by one
+- **Step-by-step Validation**: Systematically validates each review rule one by one
 - **Multi-tool Collaboration**: Calls appropriate MCP tools as needed
 - **Real-time Feedback**: Provides immediate results after validating each rule
 - **Comprehensive Report**: Generates detailed audit reports and improvement suggestions
@@ -185,7 +185,7 @@ pip install -r requirements.txt
 4. Test connection to ensure configuration is correct
 
 #### Step 2: Knowledge Base
-1. Upload financial reimbursement rule documents (supports TXT, PDF, DOCX formats)
+1. Upload document review rule documents (supports TXT, PDF, DOCX formats)
 2. Or use built-in example documents
 3. System automatically extracts rules and converts them to JSON format
 4. View extracted rules to confirm accuracy
@@ -197,8 +197,8 @@ pip install -r requirements.txt
 4. Confirm all server connection statuses are normal
 
 #### Step 4: Intelligent Q&A
-1. Enter financial reimbursement related questions
-2. Optionally upload invoice images or PDF files
+1. Enter document review related questions
+2. Optionally upload document images or PDF files
 3. System performs intelligent analysis and audit based on rules
 4. Receive detailed audit reports and suggestions
 
@@ -208,7 +208,7 @@ pip install -r requirements.txt
 ```
 User: What are the accommodation standards for travel expenses?
 
-System: According to financial reimbursement rules, travel expense accommodation standards vary by city tier:
+System: According to document review rules, travel expense accommodation standards vary by city tier:
 - First-tier cities: 600 RMB/night
 - Second-tier cities: 500 RMB/night
 - Other regions: 400 RMB/night uniformly
@@ -316,9 +316,9 @@ The system implements advanced streaming output mechanism, providing the followi
 4. **Streaming Interaction**: Provides smooth real-time user experience
 
 ### Business Value
-1. **Improved Efficiency**: Automated reimbursement audit, significantly improves processing speed
+1. **Improved Efficiency**: Automated document audit, significantly improves processing speed
 2. **Cost Reduction**: Reduces manual audit costs and error rates
-3. **Standardization**: Ensures consistency and standardization of reimbursement audits
+3. **Standardization**: Ensures consistency and standardization of document audits
 4. **Compliance**: Rule-based audit ensures compliance requirements
 
 ### User Experience
@@ -348,4 +348,4 @@ This intelligent agent can be completely deployed locally and connected to local
 
 ---
 
-**Disclaimer**: The financial reimbursement rules and audit functions provided by this project are for reference and learning purposes only and do not constitute any legal or financial advice. Actual financial reimbursement systems should be customized according to specific company situations, industry characteristics and local laws and regulations. Before using this system, please consult professional financial and legal advisors.
+**Disclaimer**: The document review rules and audit functions provided by this project are for reference and learning purposes only and do not constitute any legal or financial advice. Actual document review systems should be customized according to specific company situations, industry characteristics and local laws and regulations. Before using this system, please consult professional financial and legal advisors.

@@ -58,14 +58,14 @@ def create_mock_ai_client():
     ai_client.connected = True
     
     # 模拟analyze_text方法
-    async def mock_analyze_text(user_text, conversation_history, reimbursement_rules):
+    async def mock_analyze_text(user_text, conversation_history, document_review_rules):
         return {
             "success": True,
-            "analysis": f"这是对文本 '{user_text}' 的分析结果。基于规则：{', '.join(reimbursement_rules[:2])}..."
+            "analysis": f"这是对文本 '{user_text}' 的分析结果。基于规则：{', '.join(document_review_rules[:2])}..."
         }
     
     # 模拟analyze_document方法
-    async def mock_analyze_document(image_url, user_text="", reimbursement_rules=None):
+    async def mock_analyze_document(image_url, user_text="", document_review_rules=None):
         return {
             "success": True,
             "document_data": {
@@ -87,8 +87,8 @@ def create_mock_ai_client():
                         "detail": "发票金额在合理范围内"
                     }
                 ],
-                "audit_conclusion": "发票审核通过，符合所有报销规则",
-                "suggestions": ["建议保留原始发票", "建议按时提交报销申请"]
+                "audit_conclusion": "发票审核通过，符合所有审核规则",
+                "suggestions": ["建议保留原始发票", "建议按时提交审核申请"]
             }
         }
     

@@ -1573,11 +1573,11 @@ class AuditAgentApp:
         self.setup_ui()
     
     def setup_ui(self):
-        with gr.Blocks(title="财务报销智能体") as self.app:
+        with gr.Blocks(title="单据审核智能体") as self.app:
             # Initialize session state
             session_id = gr.State(init_session)
             
-            gr.Markdown("# 财务报销智能体")
+            gr.Markdown("# 单据审核智能体")
             
             with gr.Tabs():
                 # Step 1: Settings Tab
@@ -1642,39 +1642,52 @@ class AuditAgentApp:
             gr.Markdown("## 钉钉机器人集成")
             gr.Markdown("配置钉钉机器人消息推送功能")
             
-            with gr.Row():
-                with gr.Column(scale=1):
-                    gr.Markdown("### 🔧 钉钉机器人配置")
-                    dingtalk_app_key = gr.Textbox(
-                        label="钉钉 App Key",
-                        placeholder="请输入您的钉钉 App Key",
-                        type="password",
-                        value=env_config["dingtalk_app_key"]
-                    )
-                    
-                    dingtalk_app_secret = gr.Textbox(
-                        label="钉钉 App Secret",
-                        placeholder="请输入您的钉钉 App Secret",
-                        type="password",
-                        value=env_config["dingtalk_app_secret"]
-                    )
-                    
-                    gr.Markdown("### 🤖 AI集成说明")
-                    gr.Markdown("✅ 机器人将自动使用 **Step 1** 中配置的 OpenAI API 设置进行智能分析")
-                    gr.Markdown("📋 支持功能：")
-                    gr.Markdown("• 📝 文本消息的AI分析")
-                    gr.Markdown("• 🖼️ 图片消息的智能识别（发票、文档等）")
-                    
-                    with gr.Row():
-                        dingtalk_start_btn = gr.Button("🚀 启动机器人", variant="primary")
-                        dingtalk_stop_btn = gr.Button("⏹️ 停止机器人", variant="secondary")
-                    
-                    dingtalk_status = gr.Textbox(
-                        label="机器人状态",
-                        value=dingtalk_bot_status,
-                        interactive=False,
-                        lines=3
-                    )
+            # 添加checkbox开关控制钉钉配置显示
+            enable_dingtalk = gr.Checkbox(
+                label="启用钉钉机器人配置",
+                value=False,
+                info="勾选后展开钉钉机器人配置选项"
+            )
+            
+            # 使用gr.Column来包含钉钉配置项，通过visible属性控制显示
+            with gr.Column(visible=False) as dingtalk_config_column:
+                with gr.Row():
+                    with gr.Column(scale=1):
+                        gr.Markdown("### 🔧 钉钉机器人配置")
+                        dingtalk_app_key = gr.Textbox(
+                            label="钉钉 App Key",
+                            placeholder="请输入您的钉钉 App Key",
+                            type="password",
+                            value=env_config["dingtalk_app_key"]
+                        )
+                        
+                        dingtalk_app_secret = gr.Textbox(
+                            label="钉钉 App Secret",
+                            placeholder="请输入您的钉钉 App Secret",
+                            type="password",
+                            value=env_config["dingtalk_app_secret"]
+                        )
+                        
+                        gr.Markdown("✅ 机器人将自动使用 **Step 1** 中配置的 OpenAI API 设置进行智能分析")
+                        gr.Markdown("🖼️ 支持文本、图片消息，并根据 **Step 2** 中配置的规则进行单据审核")
+                        
+                        with gr.Row():
+                            dingtalk_start_btn = gr.Button("🚀 启动机器人", variant="primary")
+                            dingtalk_stop_btn = gr.Button("⏹️ 停止机器人", variant="secondary")
+                        
+                        dingtalk_status = gr.Textbox(
+                            label="机器人状态",
+                            value=dingtalk_bot_status,
+                            interactive=False,
+                            lines=3
+                        )
+            
+            # 设置checkbox变化事件，控制配置区域的显示/隐藏
+            enable_dingtalk.change(
+                fn=lambda x: gr.update(visible=x),
+                inputs=[enable_dingtalk],
+                outputs=[dingtalk_config_column]
+            )
             
             # Set up event handlers for DingTalk bot with AI integration
             dingtalk_start_btn.click(
@@ -1756,9 +1769,9 @@ class AuditAgentApp:
     def setup_knowledge_base_tab(self, session_id):
         with gr.Row():
             with gr.Column():
-                gr.Markdown("## 知识库 - 财务报销规则提取")
-                gr.Markdown("### 🤖 使用LLM大模型抽取报销规则")
-                gr.Markdown("本步骤使用您在Step 1中配置的大语言模型（LLM）来智能抽取财务报销规则。系统会分析您上传的文档内容，自动识别并提取其中的报销规则，并转换为结构化的JSON格式。")
+                gr.Markdown("## 知识库 - 单据审核规则提取")
+                gr.Markdown("### 🤖 使用LLM大模型抽取审核规则")
+                gr.Markdown("本步骤使用您在Step 1中配置的大语言模型（LLM）来智能抽取单据审核规则。系统会分析您上传的文档内容，自动识别并提取其中的审核规则，并转换为结构化的JSON格式。")
                 gr.Markdown("支持上传的文档类型：.txt（文本文档）、.pdf（PDF文档）、.docx（Word文档）、.doc（旧版Word文档，建议转换为.docx格式）")
                 
                 file_upload = gr.File(
@@ -1783,7 +1796,7 @@ class AuditAgentApp:
                 upload_example_btn = gr.Button("上传示例文档", variant="secondary")
                 
                 rules_output = gr.JSON(
-                    label="提取的财务报销规则"
+                    label="提取的单据审核规则"
                 )
                 
                 processing_status = gr.Textbox(
@@ -1832,7 +1845,7 @@ class AuditAgentApp:
                     
                     # Create prompt for rule extraction
                     prompt = f"""
-                    请从以下文档内容中提取所有关于财务报销的规则，并以JSON格式返回。
+                    请从以下文档内容中提取所有关于单据审核的规则，并以JSON格式返回。
                     返回格式应该是一个规则列表，每个规则包含以下字段：
                     - rule_name: 规则名称
                     - rule_description: 规则描述

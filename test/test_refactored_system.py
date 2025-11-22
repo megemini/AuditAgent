@@ -57,9 +57,9 @@ async def test_session_manager():
         print(f"❌ 会话管理器测试失败: {e}")
         return False
 
-async def test_reimbursement_rules():
-    """测试报销规则管理"""
-    print("\n=== 测试报销规则管理 ===")
+async def test_document_review_rules():
+    """测试审核规则管理"""
+    print("\n=== 测试审核规则管理 ===")
     
     try:
         from core.reimbursement_rules import get_rules_manager
@@ -85,7 +85,7 @@ async def test_reimbursement_rules():
         return True
         
     except Exception as e:
-        print(f"❌ 报销规则管理测试失败: {e}")
+        print(f"❌ 审核规则管理测试失败: {e}")
         return False
 
 async def test_langchain_manager():
@@ -190,7 +190,7 @@ async def run_all_tests():
     tests = [
         ("文件结构", test_file_structure),
         ("会话管理器", test_session_manager),
-        ("报销规则管理", test_reimbursement_rules),
+        ("审核规则管理", test_document_review_rules),
         ("LangChain管理器", test_langchain_manager),
         ("模块集成", test_integration)
     ]

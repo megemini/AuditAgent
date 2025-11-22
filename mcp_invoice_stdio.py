@@ -11,7 +11,7 @@ import requests
 import logging
 import time
 from fastmcp import FastMCP
-from invoice_core_llm import inference
+from core.invoice_core_llm import inference
 
 # 配置日志
 logging.basicConfig(

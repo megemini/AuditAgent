@@ -198,7 +198,7 @@ class AIServiceClient:
     
     async def analyze_text(self, user_text: str = "", conversation_history: Optional[List[Dict[str, str]]] = None,
                           reimbursement_rules: Optional[list] = None) -> Dict[str, Any]:
-        """分析用户文本 - 基于对话历史和报销规则进行文本分析"""
+        """分析用户文本 - 基于对话历史和审核规则进行文本分析"""
         if not self.connected:
             return {"success": False, "message": "AI服务未初始化"}
         

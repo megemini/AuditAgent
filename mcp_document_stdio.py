@@ -14,7 +14,7 @@ import logging
 import time
 import io
 from fastmcp import FastMCP
-from paddle_ocr_manager import get_ocr_manager
+from core.paddle_ocr_manager import get_ocr_manager
 import openai
 import json
 from PIL import Image
@@ -104,19 +104,18 @@ def extract_text_with_ocr(image_source):
         提取的文字列表
     """
     return ocr_manager.extract_text(image_source, lang='ch')
-
 def analyze_document_with_ai(ocr_text, user_text, api_key, base_url, model, image_url=None, reimbursement_rules=None):
     """
-    使用 AI 分析单据内容，进行财务审核并返回审核意见
+    使用AI分析文档内容
     
     Args:
-        ocr_text: OCR 提取的文字列表
-        user_text: 用户输入的额外文字
+        ocr_text: OCR提取的文本
+        user_text: 用户的问题
         api_key: OpenAI API密钥
         base_url: OpenAI API基础URL
         model: OpenAI模型名称
         image_url: 图像URL，用于多模态模型输入
-        reimbursement_rules: 财务报销规则列表
+        reimbursement_rules: 单据审核规则列表
     
     Returns:
         AI 分析结果 (JSON格式)
@@ -126,19 +125,17 @@ def analyze_document_with_ai(ocr_text, user_text, api_key, base_url, model, imag
     
     # 合并OCR文本和用户文本
     ocr_content = "\n".join(ocr_text) if ocr_text else ""
-    
-    # 构建报销规则上下文
+    # 构建审核规则上下文
     rules_context = ""
     if reimbursement_rules:
         rules_context = "\n".join([f"{i+1}. {rule}" for i, rule in enumerate(reimbursement_rules)])
     else:
-        rules_context = "未提供具体的财务报销规则"
+        rules_context = "未提供具体的单据审核规则"
     
-    # 构建财务审核提示
     prompt = f"""
-你是一个财务报销专家，请基于以下财务报销规则对用户的问题进行详细分析和审核。
+你是一个单据审核专家，请基于以下单据审核规则对用户的问题进行详细分析和审核。
 
-财务报销规则：
+单据审核规则：
 {rules_context}
 
 用户问题：{user_text}

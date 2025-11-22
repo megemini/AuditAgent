@@ -15,7 +15,7 @@ import logging
 import time
 import asyncio
 
-from paddle_ocr_manager import get_ocr_manager
+from core.paddle_ocr_manager import get_ocr_manager
 from PIL import Image
 
 try:
