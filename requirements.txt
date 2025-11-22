@@ -13,5 +13,8 @@ openai
 python-docx
 dingtalk-stream
 python-dotenv
-langchain
-langchain-openai
+langchain==0.3.27
+langchain-core==0.3.74
+langchain-openai==0.3.31
+langchain-text-splitters==0.3.9
+langsmith==0.4.17
