@@ -25,6 +25,12 @@ license: Apache License 2.0
 
 ![step1](doc/step1.png)
 
+AI Studio project：
+https://aistudio.baidu.com/application/detail/103657
+
+AI Studio demo：
+https://www.bilibili.com/video/BV1ybUWBhEvh/?vd_source=52a02e4f0aa6b27776bd86a6d103f2d1
+
 ## 📋 Project Overview
 
 The Document Review Intelligent Agent is an AI-powered assistant based on large language models, designed to help enterprise employees quickly understand document review policies, audit document materials, and improve review efficiency. The system integrates various advanced technologies including natural language processing, optical character recognition (OCR), Model Context Protocol (MCP), and more, providing comprehensive document review services to users.

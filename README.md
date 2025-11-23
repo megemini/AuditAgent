@@ -26,6 +26,12 @@ license: Apache License 2.0
 
 ![step1](doc/step1.png)
 
+AI Studio 项目应用地址：
+https://aistudio.baidu.com/application/detail/103657
+
+AI Studio 项目演示地址：
+https://www.bilibili.com/video/BV1ybUWBhEvh/?vd_source=52a02e4f0aa6b27776bd86a6d103f2d1
+
 ## 📋 项目概述
 
 单据审核智能体是一个基于大语言模型的智能助手，旨在帮助企业员工快速了解单据审核规则、审核单据材料，提高审核效率。该系统集成了多种先进技术，包括自然语言处理、光学字符识别(OCR)、模型上下文协议(MCP)等，为用户提供全方位的单据审核服务。
