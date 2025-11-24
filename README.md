@@ -26,11 +26,19 @@ license: Apache License 2.0
 
 ![step1](doc/step1.png)
 
-AI Studio 项目应用地址：
+## AI Studio 项目应用地址：
 https://aistudio.baidu.com/application/detail/103657
 
-AI Studio 项目演示地址：
+## AI Studio 项目演示地址：
 https://www.bilibili.com/video/BV1ybUWBhEvh/?vd_source=52a02e4f0aa6b27776bd86a6d103f2d1
+
+## 致谢：
+
+感谢 [Comate](https://comate.baidu.com/) 送了一个月的会员 🫡🫡🫡
+
+> 哦，对了，另一款国产 AI 编程工具，到现在 **还** **没** **有** linux/ubuntu 版本，排了快一年的队了，隔壁大佬都生娃了 ～ 🫣🫣🫣
+
+![comate](doc/comate.png)
 
 ## 📋 项目概述
 

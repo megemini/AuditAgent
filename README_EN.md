@@ -25,11 +25,17 @@ license: Apache License 2.0
 
 ![step1](doc/step1.png)
 
-AI Studio project：
+## AI Studio project：
 https://aistudio.baidu.com/application/detail/103657
 
-AI Studio demo：
+## AI Studio demo：
 https://www.bilibili.com/video/BV1ybUWBhEvh/?vd_source=52a02e4f0aa6b27776bd86a6d103f2d1
+
+## Thanks
+
+Comate, https://comate.baidu.com/
+
+![comate](doc/comate.png)
 
 ## 📋 Project Overview
 
