@@ -36,7 +36,7 @@ https://www.bilibili.com/video/BV1ybUWBhEvh/?vd_source=52a02e4f0aa6b27776bd86a6d
 
 感谢 [Comate](https://comate.baidu.com/) 送了一个月的会员 🫡🫡🫡
 
-> 哦，对了，另一款国产 AI 编程工具，到现在 **还** **没** **有** linux/ubuntu 版本，排了快一年的队了，隔壁大佬都生娃了 ～ 🫣🫣🫣
+> 哦，对了，另一款国产 AI 编程工具，到现在 **还** **没** **有** linux/ubuntu 版本，排了快一年的队了，隔壁大佬娃都生了 ～ 🫣🫣🫣
 
 ![comate](doc/comate.png)
 
