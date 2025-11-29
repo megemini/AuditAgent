@@ -70,13 +70,76 @@ class PaddleOCRManager:
         try:
             model = self._ocr_models[lang]
             
-            result = model.ocr(image_source)[0]
-
+            # 处理PIL Image
+            if hasattr(image_source, 'save'):  # 检查是否是PIL Image
+                import numpy as np
+                image_source = np.array(image_source)
+            
+            result = model.ocr(image_source)
+            
             logger.info('>'*10)
             logger.info(result)
             
-            txts = [line[1][0] for line in result]
-            scores = [line[1][1] for line in result]
+            # 检查结果是否为空
+            if not result:
+                logger.warning("OCR返回空结果")
+                return []
+            
+            # 处理PaddleOCR 3.x版本的字典格式结果
+            if isinstance(result, dict):
+                # 从字典中提取rec_texts和rec_scores
+                rec_texts = result.get('rec_texts', [])
+                rec_scores = result.get('rec_scores', [])
+                
+                if not rec_texts:
+                    logger.warning("OCR未检测到任何文本")
+                    return []
+                
+                logger.info(f"从字典格式结果中提取到 {len(rec_texts)} 个文本")
+                return rec_texts
+            
+            # 处理列表格式结果（PaddleOCR 3.x）
+            if isinstance(result, list):
+                if len(result) == 0:
+                    logger.warning("OCR返回空列表")
+                    return []
+                
+                # 检查是否是字典格式（PaddleOCR 3.x新格式）
+                if isinstance(result[0], dict):
+                    rec_texts = result[0].get('rec_texts', [])
+                    rec_scores = result[0].get('rec_scores', [])
+                    
+                    if not rec_texts:
+                        logger.warning("OCR未检测到任何文本")
+                        return []
+                    
+                    logger.info(f"从3.x格式结果中提取到 {len(rec_texts)} 个文本")
+                    txts = rec_texts
+                    scores = rec_scores
+                else:
+                    # 处理传统列表格式结果
+                    if not result[0]:
+                        logger.warning("OCR未检测到任何文本")
+                        return []
+                    
+                    # 验证结果格式
+                    valid_lines = []
+                    for line in result[0]:
+                        if (isinstance(line, list) and len(line) >= 2 and 
+                            isinstance(line[1], list) and len(line[1]) >= 2):
+                            valid_lines.append(line)
+                        else:
+                            logger.warning(f"跳过格式不正确的OCR结果行: {line}")
+                    
+                    if not valid_lines:
+                        logger.warning("没有找到有效的OCR结果行")
+                        return []
+                    
+                    txts = [line[1][0] for line in valid_lines]
+                    scores = [line[1][1] for line in valid_lines]
+            else:
+                logger.warning(f"未知的OCR结果格式: {type(result)}")
+                return []
             
             ocr_end_time = time.time()
             logger.info(f"OCR 文字提取完成，耗时: {ocr_end_time - ocr_start_time:.2f}秒")
@@ -119,15 +182,44 @@ class PaddleOCRManager:
         try:
             model = self._ocr_models[lang]
             
-            # 使用传统的 ocr 方法获取边界框信息
-            result = model.ocr(image_source, cls=True)
-            if result and len(result) > 0:
-                result = result[0]
-                boxes = [line[0] for line in result]
-                txts = [line[1][0] for line in result]
-                scores = [line[1][1] for line in result]
-            else:
+            # 处理PIL Image
+            if hasattr(image_source, 'save'):  # 检查是否是PIL Image
+                import numpy as np
+                image_source = np.array(image_source)
+            
+            # 使用PaddleOCR 3.x兼容的方法获取边界框信息
+            try:
+                # 首先尝试使用新版本的API
+                result = model.ocr(image_source)
+            except Exception:
+                # 如果失败，尝试不使用cls参数
+                result = model.ocr(image_source)
+            
+            if not result or len(result) == 0:
                 boxes, txts, scores = [], [], []
+            elif isinstance(result[0], dict):
+                # PaddleOCR 3.x字典格式
+                rec_boxes_str = result[0].get('rec_boxes', '[]')
+                rec_texts = result[0].get('rec_texts', [])
+                rec_scores = result[0].get('rec_scores', [])
+                
+                try:
+                    import ast
+                    boxes = ast.literal_eval(rec_boxes_str)
+                except:
+                    boxes = []
+                
+                txts = rec_texts
+                scores = rec_scores
+            else:
+                # 传统列表格式
+                if len(result) > 0 and result[0]:
+                    result = result[0]
+                    boxes = [line[0] for line in result]
+                    txts = [line[1][0] for line in result]
+                    scores = [line[1][1] for line in result]
+                else:
+                    boxes, txts, scores = [], [], []
             
             ocr_end_time = time.time()
             logger.info(f"OCR 文字和边界框提取完成，耗时: {ocr_end_time - ocr_start_time:.2f}秒")

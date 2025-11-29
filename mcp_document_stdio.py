@@ -125,12 +125,52 @@ def analyze_document_with_ai(ocr_text, user_text, api_key, base_url, model, imag
     
     # 合并OCR文本和用户文本
     ocr_content = "\n".join(ocr_text) if ocr_text else ""
+    
+    # 检查是否有实际内容进行识别
+    if not ocr_content.strip() and not user_text.strip():
+        logger.info("没有OCR文本和用户输入，返回明确的错误信息")
+        return {
+            "document_type": "未知",
+            "extracted_info": {},
+            "verification_results": [],
+            "audit_conclusion": "无法进行单据识别：既未提供单据文件，也未提供任何文字描述。",
+            "suggestions": [
+                "请上传单据文件（图片、PDF等）进行识别",
+                "或者提供详细的单据描述信息"
+            ]
+        }
+    
     # 构建审核规则上下文
     rules_context = ""
     if reimbursement_rules:
         rules_context = "\n".join([f"{i+1}. {rule}" for i, rule in enumerate(reimbursement_rules)])
     else:
         rules_context = "未提供具体的单据审核规则"
+    
+    # 根据是否有OCR内容调整prompt
+    if not ocr_content.strip():
+        content_section = "未提供单据文件，仅基于用户描述进行分析"
+        analysis_instruction = """
+**重要：由于未提供单据文件，请基于用户描述进行以下分析：**
+
+**第一步：理解用户需求**
+- 理解用户描述的单据类型和内容
+- 识别用户提到的关键信息（金额、日期、类型等）
+
+**第二步：基于描述分析**
+- 根据用户描述推断可能的单据类型
+- 提取用户明确提到的信息
+- 如有审核规则，进行概念性验证
+
+**第三步：提供建议**
+- 说明基于描述分析的局限性
+- 建议用户提供更多具体信息或上传单据文件
+"""
+    else:
+        content_section = f"OCR识别的单据内容：\n{ocr_content}"
+        analysis_instruction = """
+**重要：如果用户上传了单据或要求审核单据，请按以下步骤进行逐条验证的审核流程：**
+"""
     
     prompt = f"""
 你是一个单据审核专家，请基于以下单据审核规则对用户的问题进行详细分析和审核。
@@ -140,7 +180,9 @@ def analyze_document_with_ai(ocr_text, user_text, api_key, base_url, model, imag
 
 用户问题：{user_text}
 
-**重要：如果用户上传了单据或要求审核单据，请按以下步骤进行逐条验证的审核流程：**
+{content_section}
+
+{analysis_instruction}
 
 **第一步：单据识别**
 - 使用 recognize_document 工具识别单据信息
@@ -187,9 +229,6 @@ def analyze_document_with_ai(ocr_text, user_text, api_key, base_url, model, imag
 - query_city_tier: 查询单个城市分级（用于城市标准相关规则验证）
 - query_multiple_cities: 批量查询多个城市分级
 - get_cities_by_tier: 获取指定分级的所有城市
-
-OCR识别的单据内容：
-{ocr_content}
 
 请基于以上信息进行财务审核，并返回详细的审核意见。返回格式应为JSON，包含以下字段：
 - document_type: 单据类型

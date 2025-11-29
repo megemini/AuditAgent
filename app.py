@@ -83,9 +83,10 @@ def load_config_from_env():
         "base_url_input": os.getenv("base_url_input", "https://aistudio.baidu.com/llm/lmapi/v3"),
         "model_input": os.getenv("model_input", "ernie-4.5-turbo-vl-preview"),
         "dingtalk_app_key": os.getenv("dingtalk_app_key", ""),
-        "dingtalk_app_secret": os.getenv("dingtalk_app_secret", "")
+        "dingtalk_app_secret": os.getenv("dingtalk_app_secret", ""),
+        "enable_vision_model": os.getenv("enable_vision_model", "false").lower() == "true"
     }
-    logger.info(f"Configuration loaded from .env file: api_key={'***' if config['api_key_input'] else 'not set'}, base_url_input={'set' if config['base_url_input'] else 'not set'}, model_input={'set' if config['model_input'] else 'not set'}, dingtalk_app_key={'***' if config['dingtalk_app_key'] else 'not set'}, dingtalk_app_secret={'***' if config['dingtalk_app_secret'] else 'not set'}")
+    logger.info(f"Configuration loaded from .env file: api_key={'***' if config['api_key_input'] else 'not set'}, base_url_input={'set' if config['base_url_input'] else 'not set'}, model_input={'set' if config['model_input'] else 'not set'}, dingtalk_app_key={'***' if config['dingtalk_app_key'] else 'not set'}, dingtalk_app_secret={'***' if config['dingtalk_app_secret'] else 'not set'}, enable_vision_model={config['enable_vision_model']}")
     return config
 
 def start_dingtalk_bot_with_ai(dingtalk_app_key: str, dingtalk_app_secret: str, session_id: str) -> str:
@@ -326,16 +327,22 @@ global_mcp_client = FastMCPStdioClientWrapper()
 
 def init_session():
     session_id = str(uuid4())
+    # 从环境变量获取默认的视觉大模型配置
+    env_config = load_config_from_env()
     session_store[session_id] = {
         "client": None,
         "model": None,
-        "reimbursement_rules": []
+        "reimbursement_rules": [],
+        "enable_vision_model": env_config.get("enable_vision_model", False)
     }
     return session_id
 
-def test_and_store_client(api_key: str, base_url: str, model: str, session_id: str):
+def test_and_store_client(api_key: str, base_url: str, model: str, session_id: str, enable_vision_model: bool = False):
     """Test OpenAI API connection and store client in session"""
     try:
+        # 添加调试日志
+        logger.info(f"test_and_store_client被调用: session_id={session_id}, enable_vision_model={enable_vision_model}")
+        
         # Set up the OpenAI client
         client = openai.OpenAI(
             api_key=api_key,
@@ -355,15 +362,21 @@ def test_and_store_client(api_key: str, base_url: str, model: str, session_id: s
         # Store client and model in session
         session_store[session_id]["client"] = client
         session_store[session_id]["model"] = model
+        session_store[session_id]["enable_vision_model"] = enable_vision_model
+        
+        # 添加调试日志
+        logger.info(f"session更新后: enable_vision_model={session_store[session_id].get('enable_vision_model')}")
         
         # Save API credentials to environment variables with session_id
         os.environ[f"OPENAI_API_KEY_{session_id}"] = api_key
         os.environ[f"OPENAI_BASE_URL_{session_id}"] = base_url
         os.environ[f"OPENAI_MODEL_{session_id}"] = model
+        os.environ[f"ENABLE_VISION_MODEL_{session_id}"] = str(enable_vision_model)
         os.environ[f"SESSION_ID"] = session_id
         
-        return "✅ 连接成功！API 配置有效。"
+        return f"✅ 连接成功！API 配置有效。视觉大模型启用状态: {enable_vision_model}"
     except Exception as e:
+        logger.error(f"test_and_store_client失败: {e}")
         return f"❌ 连接失败: {str(e)}"
 
 def load_example_text():
@@ -625,71 +638,186 @@ async def _process_query_with_tools_streaming(question, history, session_id: str
 
     # Prepare the main prompt with step-by-step audit instructions
     logger.info("准备主要提示...")
-    base_prompt = f"""
-    你是一个财务报销专家，请基于以下财务报销规则对用户的问题进行详细分析和审核。
+    
+    # 检查是否启用视觉大模型
+    session_data = session_store.get(session_id, {})
+    enable_vision_model = session_data.get("enable_vision_model", False)
+    
+    if enable_vision_model:
+        # 启用视觉大模型的提示
+        base_prompt = f"""
+        你是一个财务报销专家，请基于以下财务报销规则对用户的问题进行详细分析和审核。
 
-    财务报销规则：
-    {rules_context}
+        财务报销规则：
+        {rules_context}
 
-    用户问题：{question}
+        用户问题：{question}
 
-    **重要：如果用户上传了单据或要求审核单据，请按以下步骤进行逐条验证的审核流程：**
+        **重要：如果用户上传了单据或要求审核单据，请按以下步骤进行逐条验证的审核流程：**
 
-    **第一步：单据识别**
-    - 使用 recognize_document 工具识别单据信息
-    - 提取单据的关键信息：金额、日期、城市、类型等
-    - 该工具支持多种单据类型：发票、收据、合同、订单、报销单等
-    - 支持灵活的 JSON 格式输出，不严格限制字段结构
+        **第一步：单据识别**
+        - 使用 recognize_document 工具识别单据信息
+        - 提取单据的关键信息：金额、日期、城市、类型等
+        - 该工具支持多种单据类型：发票、收据、合同、订单、报销单等
+        - 支持灵活的 JSON 格式输出，不严格限制字段结构
 
-    **第二步：逐条规则验证**
-    - **一次只验证一条规则，按顺序进行**
-    - **每条规则验证时，如果需要额外信息，就调用相应的MCP工具**
-    - **验证完一条规则后，立即给出该规则的验证结果**
-    - **然后继续验证下一条规则**
+        **第二步：逐条规则验证**
+        - **一次只验证一条规则，按顺序进行**
+        - **每条规则验证时，如果需要额外信息，就调用相应的MCP工具**
+        - **验证完一条规则后，立即给出该规则的验证结果**
+        - **然后继续验证下一条规则**
 
-    **验证流程示例**：
-    ```
-    正在验证规则1：[规则名称]
-    → 需要获取当前时间 → 调用 get_current_time 工具
-    → 验证结果：✅ 符合 / ❌ 不符合 / ⚠️ 需注意
-    → 详细说明：[具体验证过程和结果]
+        **验证流程示例**：
+        ```
+        正在验证规则1：[规则名称]
+        → 需要获取当前时间 → 调用 get_current_time 工具
+        → 验证结果：✅ 符合 / ❌ 不符合 / ⚠️ 需注意
+        → 详细说明：[具体验证过程和结果]
 
-    正在验证规则2：[规则名称]
-    → 需要查询城市分级 → 调用 query_city_tier 工具
-    → 验证结果：✅ 符合 / ❌ 不符合 / ⚠️ 需注意
-    → 详细说明：[具体验证过程和结果]
+        正在验证规则2：[规则名称]
+        → 需要查询城市分级 → 调用 query_city_tier 工具
+        → 验证结果：✅ 符合 / ❌ 不符合 / ⚠️ 需注意
+        → 详细说明：[具体验证过程和结果]
 
-    ... 继续验证其他规则
-    ```
+        ... 继续验证其他规则
+        ```
 
-    **第三步：汇总审核结果**
-    - 只有在所有规则都验证完成后，才生成最终的审核报告
-    - 统计所有规则的验证结果
-    - 给出最终结论和改进建议
+        **第三步：汇总审核结果**
+        - 只有在所有规则都验证完成后，才生成最终的审核报告
+        - 统计所有规则的验证结果
+        - 给出最终结论和改进建议
 
-    **重要原则**：
-    - 🔄 **逐条进行**：一次只验证一条规则，不要批量处理
-    - 🛠️ **按需调用工具**：只有当验证某条规则需要额外信息时，才调用相应工具
-    - 📝 **即时反馈**：每验证完一条规则，立即给出该规则的结果
-    - 🎯 **最后汇总**：所有规则验证完成后，再生成最终的审核报告
-    - ✅ **不中断流程**：即使某条规则不符合，也要继续验证其他规则
+        **重要原则**：
+        - 🔄 **逐条进行**：一次只验证一条规则，不要批量处理
+        - 🛠️ **按需调用工具**：只有当验证某条规则需要额外信息时，才调用相应工具
+        - 📝 **即时反馈**：每验证完一条规则，立即给出该规则的结果
+        - 🎯 **最后汇总**：所有规则验证完成后，再生成最终的审核报告
+        - ✅ **不中断流程**：即使某条规则不符合，也要继续验证其他规则
 
-    **可用的MCP工具**（按需调用）：
-    - recognize_document: 识别单据信息（支持发票、收据、合同、订单等多种单据类型）
-    - get_current_time: 获取当前时间（用于时间相关规则验证）
-    - query_city_tier: 查询单个城市分级（用于城市标准相关规则验证）
-    - query_multiple_cities: 批量查询多个城市分级
-    - get_cities_by_tier: 获取指定分级的所有城市
+        **可用的MCP工具**（按需调用）：
+        - recognize_document: 识别单据信息（支持发票、收据、合同、订单等多种单据类型）
+        - get_current_time: 获取当前时间（用于时间相关规则验证）
+        - query_city_tier: 查询单个城市分级（用于城市标准相关规则验证）
+        - query_multiple_cities: 批量查询多个城市分级
+        - get_cities_by_tier: 获取指定分级的所有城市
 
-    会话ID: {session_id}
-    """
+        会话ID: {session_id}
+        """
+    else:
+        # 未启用视觉大模型的提示
+        base_prompt = f"""
+        你是一个财务报销专家，请基于以下财务报销规则对用户的问题进行详细分析和审核。
 
-    # Only add the main message if this is the first question (not a follow-up)
+        财务报销规则：
+        {rules_context}
+
+        用户问题：{question}
+
+        **重要：如果用户上传了单据，系统已主动进行OCR识别，请按以下步骤进行逐条验证的审核流程：**
+
+        **第一步：基于OCR结果分析**
+        - 系统已通过OCR技术主动识别了单据文本内容
+        - 请基于识别的文本信息进行财务审核分析
+        - 提取单据的关键信息：金额、日期、城市、类型等
+
+        **第二步：逐条规则验证**
+        - **一次只验证一条规则，按顺序进行**
+        - **每条规则验证时，如果需要额外信息，就调用相应的MCP工具**
+        - **验证完一条规则后，立即给出该规则的验证结果**
+        - **然后继续验证下一条规则**
+
+        **验证流程示例**：
+        ```
+        正在验证规则1：[规则名称]
+        → 需要获取当前时间 → 调用 get_current_time 工具
+        → 验证结果：✅ 符合 / ❌ 不符合 / ⚠️ 需注意
+        → 详细说明：[具体验证过程和结果]
+
+        正在验证规则2：[规则名称]
+        → 需要查询城市分级 → 调用 query_city_tier 工具
+        → 验证结果：✅ 符合 / ❌ 不符合 / ⚠️ 需注意
+        → 详细说明：[具体验证过程和结果]
+
+        ... 继续验证其他规则
+        ```
+
+        **第三步：汇总审核结果**
+        - 只有在所有规则都验证完成后，才生成最终的审核报告
+        - 统计所有规则的验证结果
+        - 给出最终结论和改进建议
+
+        **重要原则**：
+        - 🔄 **逐条进行**：一次只验证一条规则，不要批量处理
+        - 🛠️ **按需调用工具**：只有当验证某条规则需要额外信息时，才调用相应工具
+        - 📝 **即时反馈**：每验证完一条规则，立即给出该规则的结果
+        - 🎯 **最后汇总**：所有规则验证完成后，再生成最终的审核报告
+        - ✅ **不中断流程**：即使某条规则不符合，也要继续验证其他规则
+
+        **可用的MCP工具**（按需调用）：
+        - get_current_time: 获取当前时间（用于时间相关规则验证）
+        - query_city_tier: 查询单个城市分级（用于城市标准相关规则验证）
+        - query_multiple_cities: 批量查询多个城市分级
+        - get_cities_by_tier: 获取指定分级的所有城市
+
+        **重要提醒**：视觉大模型未启用，请勿使用任何视觉识别工具，仅基于OCR识别的文本信息进行分析。
+
+        会话ID: {session_id}
+        """
+
+            # Only add the main message if this is the first question (not a follow-up)
+    # Process with streaming multi-tool calling
+    current_history = history.copy()
+    max_iterations = 8  # Increase iterations for multi-step audit process
+    iteration = 0
+    invoice_recognized = False  # Track if invoice has been recognized
+    rules_validation_started = False  # Track if rules validation has started
+
     # Check if we already have conversation history
     has_previous_conversation = len(claude_messages) > 1
 
     if not has_previous_conversation:
         # This is the first question, add the main message with full context
+        if file_upload:
+            # 如果有文件上传，先进行OCR识别并输出结果
+            logger.info("检测到文件上传，开始OCR识别流程...")
+            
+            # 主动进行OCR识别
+            try:
+                # Support both file-like object (with .name) and plain path string
+                if hasattr(file_upload, "name") and file_upload.name:
+                    file_path = file_upload.name
+                elif isinstance(file_upload, str) and file_upload:
+                    file_path = file_upload
+                else:
+                    raise ValueError("Unsupported file_upload type or empty path")
+
+                ocr_text = await _perform_ocr_recognition(file_path, session_id)
+                # 输出OCR识别结果到对话框
+                ocr_result_message = {
+                    "role": "assistant",
+                    "content": f"📄 **OCR识别结果**\n\n```\n{ocr_text}\n```",
+                    "metadata": {
+                        "title": "OCR识别结果",
+                        "status": "done"
+                    }
+                }
+                current_history.append(ocr_result_message)
+                yield current_history
+                
+            except Exception as e:
+                logger.error(f"OCR识别失败: {e}")
+                error_message = {
+                    "role": "assistant", 
+                    "content": f"❌ OCR识别失败: {str(e)}",
+                    "metadata": {
+                        "title": "OCR识别错误",
+                        "status": "error"
+                    }
+                }
+                current_history.append(error_message)
+                yield current_history
+
+        # 然后添加主要的处理消息
         main_message = await _prepare_main_message(question, file_upload, session_id, rules_context, base_prompt)
         claude_messages.append(main_message)
     else:
@@ -700,9 +828,24 @@ async def _process_query_with_tools_streaming(question, history, session_id: str
     mcp_tools = []
     if mcp_client and mcp_client.connected_servers:
         mcp_tools = mcp_client.get_all_tools()
-
-    # Process with streaming multi-tool calling
-    current_history = history.copy()
+        
+        # 检查是否启用视觉大模型
+        session_data = session_store.get(session_id, {})
+        enable_vision_model = session_data.get("enable_vision_model", False)
+        
+        # 添加调试日志
+        logger.info(f"调试信息: session_id={session_id}")
+        logger.info(f"调试信息: session_data keys={list(session_data.keys()) if session_data else 'None'}")
+        logger.info(f"调试信息: enable_vision_model={enable_vision_model}")
+        logger.info(f"调试信息: 环境变量ENABLE_VISION_MODEL_{session_id}={os.environ.get(f'ENABLE_VISION_MODEL_{session_id}', 'Not set')}")
+        
+        # 如果未启用视觉大模型，移除recognize_document工具
+        if not enable_vision_model:
+            mcp_tools = [tool for tool in mcp_tools 
+                         if tool.get('function', {}).get('name') != 'recognize_document']
+            logger.info("视觉大模型未启用，已移除recognize_document工具")
+        else:
+            logger.info("视觉大模型已启用，保留recognize_document工具")
     max_iterations = 8  # Increase iterations for multi-step audit process
     iteration = 0
     invoice_recognized = False  # Track if invoice has been recognized
@@ -758,7 +901,52 @@ async def _process_query_with_tools_streaming(question, history, session_id: str
 
             for call in assistant_msg.tool_calls:
                 tool_name = call.function.name
-                tool_args = json.loads(call.function.arguments)
+                # 添加JSON解析的错误处理
+                try:
+                    tool_args = json.loads(call.function.arguments)
+                except json.JSONDecodeError as e:
+                    logger.error(f"JSON解析错误: {e}, 原始参数: {call.function.arguments}")
+                    # 尝试修复常见的JSON格式问题
+                    try:
+                        args_str = call.function.arguments.strip()
+                        
+                        # 如果参数为空或明显无效，返回空字典
+                        if not args_str or args_str == '' or args_str == "'":
+                            logger.warning("检测到空或无效参数，使用空字典")
+                            tool_args = {}
+                        else:
+                            # 如果参数被截断，尝试添加缺失的结束符号
+                            if not args_str.endswith('}') and args_str.count('{') > args_str.count('}'):
+                                args_str += '}'
+                            # 如果参数以单引号包围，尝试修复
+                            if args_str.startswith("'") and args_str.endswith("'"):
+                                args_str = args_str[1:-1]
+                            # 尝试解析修复后的JSON
+                            tool_args = json.loads(args_str)
+                            logger.info(f"JSON修复成功")
+                    except Exception as fix_error:
+                        # 如果仍然失败，尝试更激进的修复
+                        try:
+                            args_str = call.function.arguments.strip()
+                            # 尝试从参数中提取有效的JSON片段
+                            if '{' in args_str and '}' in args_str:
+                                start = args_str.find('{')
+                                end = args_str.rfind('}') + 1
+                                if start >= 0 and end > start:
+                                    json_fragment = args_str[start:end]
+                                    tool_args = json.loads(json_fragment)
+                                    logger.info(f"从片段中成功提取JSON")
+                                else:
+                                    tool_args = {}
+                                    logger.error(f"无法提取有效JSON片段，使用空参数")
+                            else:
+                                tool_args = {}
+                                logger.error(f"参数中不包含JSON结构，使用空参数")
+                        except Exception as final_error:
+                            # 最终失败，使用空参数
+                            tool_args = {}
+                            logger.error(f"所有JSON修复尝试都失败: {final_error}, 使用空参数")
+                
                 logger.info(f"处理工具调用: {tool_name}, 参数: {list(tool_args.keys())}")
 
                 # Track if invoice recognition tool was called
@@ -781,7 +969,10 @@ async def _process_query_with_tools_streaming(question, history, session_id: str
 
                 # Execute the tool
                 try:
+                    logger.info(f"开始执行工具: {tool_name}")
                     tool_result = await _execute_tool(tool_name, tool_args, session_id, mcp_client)
+                    logger.info(f"工具执行完成: {tool_name}, 结果类型: {type(tool_result)}")
+                    
                     tool_results.append((call.id, tool_name, tool_result))
 
                     # Update the tool call status to done
@@ -809,6 +1000,8 @@ async def _process_query_with_tools_streaming(question, history, session_id: str
                     else:
                         formatted_result = str(tool_result)
 
+                    logger.info(f"工具结果格式化完成，长度: {len(formatted_result)}")
+
                     current_history.append({
                         "role": "assistant",
                         "content": f"```\n{formatted_result}\n```",
@@ -817,12 +1010,15 @@ async def _process_query_with_tools_streaming(question, history, session_id: str
                     yield current_history
 
                 except Exception as e:
+                    logger.error(f"工具执行异常: {tool_name}, 错误: {str(e)}")
                     # Update the tool call status to error
                     if current_history and "metadata" in current_history[-1]:
                         current_history[-1]["metadata"]["status"] = "error"
                         current_history[-1]["content"] = f"❌ 工具执行失败: {tool_name}"
 
                     error_msg = f"❌ 执行工具 '{tool_name}' 时出错: {str(e)}"
+                    logger.error(f"工具错误消息: {error_msg}")
+                    
                     current_history.append({
                         "role": "assistant",
                         "content": error_msg,
@@ -1051,7 +1247,51 @@ async def _process_query_with_tools(question, history, session_id: str, file_upl
 
             for call in assistant_msg.tool_calls:
                 tool_name = call.function.name
-                tool_args = json.loads(call.function.arguments)
+                # 添加JSON解析的错误处理
+                try:
+                    tool_args = json.loads(call.function.arguments)
+                except json.JSONDecodeError as e:
+                    logger.error(f"JSON解析错误: {e}, 原始参数: {call.function.arguments}")
+                    # 尝试修复常见的JSON格式问题
+                    try:
+                        args_str = call.function.arguments.strip()
+                        
+                        # 如果参数为空或明显无效，返回空字典
+                        if not args_str or args_str == '' or args_str == "'":
+                            logger.warning("检测到空或无效参数，使用空字典")
+                            tool_args = {}
+                        else:
+                            # 如果参数被截断，尝试添加缺失的结束符号
+                            if not args_str.endswith('}') and args_str.count('{') > args_str.count('}'):
+                                args_str += '}'
+                            # 如果参数以单引号包围，尝试修复
+                            if args_str.startswith("'") and args_str.endswith("'"):
+                                args_str = args_str[1:-1]
+                            # 尝试解析修复后的JSON
+                            tool_args = json.loads(args_str)
+                            logger.info(f"JSON修复成功")
+                    except Exception as fix_error:
+                        # 如果仍然失败，尝试更激进的修复
+                        try:
+                            args_str = call.function.arguments.strip()
+                            # 尝试从参数中提取有效的JSON片段
+                            if '{' in args_str and '}' in args_str:
+                                start = args_str.find('{')
+                                end = args_str.rfind('}') + 1
+                                if start >= 0 and end > start:
+                                    json_fragment = args_str[start:end]
+                                    tool_args = json.loads(json_fragment)
+                                    logger.info(f"从片段中成功提取JSON")
+                                else:
+                                    tool_args = {}
+                                    logger.error(f"无法提取有效JSON片段，使用空参数")
+                            else:
+                                tool_args = {}
+                                logger.error(f"参数中不包含JSON结构，使用空参数")
+                        except Exception as final_error:
+                            # 最终失败，使用空参数
+                            tool_args = {}
+                            logger.error(f"所有JSON修复尝试都失败: {final_error}, 使用空参数")
 
                 # Track if invoice recognition tool was called
                 if tool_name == "recognize_single_invoice":
@@ -1238,78 +1478,29 @@ async def _prepare_main_message(question, file_upload, session_id: str, rules_co
         # Run cleanup before processing new file
         cleanup_upload_files()
 
-        message_content = []
+        # 获取会话数据和视觉大模型配置
+        session_data = session_store.get(session_id, {})
+        enable_vision_model = session_data.get("enable_vision_model", False)
 
         try:
-            # Read file content directly and convert to base64
-            with open(file_upload.name, "rb") as file_content:
-                file_data = file_content.read()
-                file_base64 = base64.b64encode(file_data).decode('utf-8')
-
-            # Check file type and process accordingly
-            file_ext = os.path.splitext(file_upload.name)[1].lower()
-
-            if file_ext == '.pdf':
-                # Process PDF file
-                pdf_text = ""
-                try:
-                    # Extract text from PDF using PyMuPDF
-                    pdf_document = fitz.open(file_upload.name)
-                    for page_num in range(len(pdf_document)):
-                        page = pdf_document.load_page(page_num)
-                        pdf_text += page.get_text() + "\n"
-                    pdf_document.close()
-
-                    # Add text content with PDF processing instructions
-                    # 关键改进：直接指示立即调用工具处理PDF
-                    message_content.append({
-                        "type": "text",
-                        "text": f"{base_prompt}\n\n⚠️ 重要指示：用户已上传了一个PDF文件。文件内容摘要如下：\n\n{pdf_text[:2000]}{'...' if len(pdf_text) > 2000 else ''}\n\n你现在必须立即执行以下步骤：\n\n**立即调用 recognize_document 工具**\n使用以下参数调用该工具：\n```\nrecognize_document(\n  image_data=\"{file_base64[:100]}...\",  # base64编码的完整PDF数据已准备好\n  user_text=\"{question}\"\n)\n```\n\n该工具接受以下参数：\n- image_data: base64编码的PDF数据（已准备好，包含完整的{len(file_base64)}字符的base64数据）\n- user_text: 用户的问题或补充说明（{question}）\n\n请立即使用这些参数调用 recognize_document 工具来识别PDF中的单据信息。该工具支持多种单据类型（发票、收据、合同、订单、报销单等），并能灵活识别其中的内容。获取工具返回的结果后，再按照第二步和第三步进行逐条规则验证和最终汇总。"
-                    })
-
-                    # Store base64 data for tool usage
-                    session_store[session_id]["file_base64"] = file_base64
-                    session_store[session_id]["file_type"] = "pdf"
-
-                except Exception as e:
-                    logger.error(f"Error processing PDF: {e}")
-                    message_content.append({
-                        "type": "text",
-                        "text": f"{base_prompt}\n\n❌ 错误：用户上传了一个PDF文件，但在处理文件时出错：{str(e)}。请提示用户检查文件格式或重新上传。"
-                    })
+            # Support both file-like object (with .name) and plain path string
+            if hasattr(file_upload, "name") and file_upload.name:
+                file_path = file_upload.name
+            elif isinstance(file_upload, str) and file_upload:
+                file_path = file_upload
             else:
-                # Process image file
-                # Get MIME type for image
-                mime_type = {
-                    '.jpg': 'image/jpeg',
-                    '.jpeg': 'image/jpeg',
-                    '.png': 'image/png',
-                    '.gif': 'image/gif',
-                    '.bmp': 'image/bmp',
-                    '.webp': 'image/webp'
-                }.get(file_ext, 'image/jpeg')
+                raise ValueError("Unsupported file_upload type or empty path")
 
-                # Create data URL
-                data_url = f"data:{mime_type};base64,{file_base64}"
-
-                # Add text content with image processing instructions
-                # 关键改进：直接指示立即调用工具，而不是描述可用参数
-                message_content.append({
-                    "type": "text",
-                    "text": f"{base_prompt}\n\n⚠️ 重要指示：用户已上传了一张图片。你现在必须立即执行以下步骤：\n\n**立即调用 recognize_document 工具**\n使用以下参数调用该工具：\n```\nrecognize_document(\n  image_data=\"{file_base64[:100]}...\",  # base64编码的完整图片数据已准备好\n  user_text=\"{question}\"\n)\n```\n\n该工具接受以下参数：\n- image_data: base64编码的图片数据（已准备好，包含完整的{len(file_base64)}字符的base64数据）\n- user_text: 用户的问题或补充说明（{question}）\n\n请立即使用这些参数调用 recognize_document 工具来识别图片中的单据信息。该工具支持多种单据类型（发票、收据、合同、订单、报销单等），并能灵活识别其中的内容。获取工具返回的结果后，再按照第二步和第三步进行逐条规则验证和最终汇总。"
-                })
-
-                # Add image content
-                message_content.append({
-                    "type": "image_url",
-                    "image_url": {
-                        "url": data_url
-                    }
-                })
-
-                # Store base64 data for tool usage
-                session_store[session_id]["file_base64"] = file_base64
-                session_store[session_id]["file_type"] = "image"
+            # 主动进行OCR识别
+            ocr_text = await _perform_ocr_recognition(file_path, session_id)
+            
+            # 根据视觉大模型配置构建消息
+            if enable_vision_model:
+                # 启用视觉大模型：包含图片和OCR结果
+                message_content = await _prepare_vision_enabled_message(question, file_path, ocr_text, base_prompt, session_id)
+            else:
+                # 未启用视觉大模型：只使用OCR结果和文本
+                message_content = await _prepare_text_only_message(question, ocr_text, base_prompt)
 
             return {"role": "user", "content": message_content}
 
@@ -1320,6 +1511,158 @@ async def _prepare_main_message(question, file_upload, session_id: str, rules_co
     else:
         # No file upload, use standard text prompt
         return {"role": "user", "content": base_prompt}
+
+
+async def _perform_ocr_recognition(file_path: str, session_id: str) -> str:
+    """主动进行OCR识别"""
+    logger.info(f"开始主动OCR识别: {file_path}")
+    
+    try:
+        # 检查文件是否存在
+        if not os.path.exists(file_path):
+            logger.error(f"文件不存在: {file_path}")
+            return f"文件不存在: {os.path.basename(file_path)}"
+        
+        file_ext = os.path.splitext(file_path)[1].lower()
+        
+        if file_ext == '.pdf':
+            # PDF文件直接提取文本
+            pdf_text = ""
+            try:
+                pdf_document = fitz.open(file_path)
+                for page_num in range(len(pdf_document)):
+                    page = pdf_document.load_page(page_num)
+                    pdf_text += page.get_text() + "\n"
+                pdf_document.close()
+                
+                logger.info(f"PDF文本提取完成，长度: {len(pdf_text)}字符")
+                
+                # 如果提取的文本为空，返回提示
+                if not pdf_text.strip():
+                    logger.warning("PDF文件未提取到文本内容")
+                    return f"PDF文件 {os.path.basename(file_path)} 未检测到文本内容，可能是图片型PDF或文件损坏。"
+                
+                return pdf_text
+                
+            except Exception as pdf_e:
+                logger.error(f"PDF处理失败: {pdf_e}")
+                return f"PDF文件 {os.path.basename(file_path)} 处理失败: {str(pdf_e)}"
+                
+        else:
+            # 图片文件进行OCR
+            # 导入OCR管理器
+            try:
+                from core.paddle_ocr_manager import get_ocr_manager
+                ocr_manager = get_ocr_manager()
+                ocr_manager.initialize(lang='ch')
+                
+                # 进行OCR识别
+                from PIL import Image
+                try:
+                    image = Image.open(file_path).convert("RGB")
+                    boxes, txts, scores = ocr_manager.extract_text_with_boxes(file_path, 'ch')
+                    
+                    # 合并OCR文本
+                    ocr_text = "\n".join(txts)
+                    logger.info(f"图片OCR识别完成，识别到{len(txts)}个文本块，总长度: {len(ocr_text)}字符")
+                    
+                    # 如果识别的文本为空，返回提示
+                    if not ocr_text.strip():
+                        logger.warning("图片OCR未识别到文本内容")
+                        return f"图片文件 {os.path.basename(file_path)} 未识别到文本内容，可能是图片质量问题。"
+                    
+                    return ocr_text
+                    
+                except Exception as img_e:
+                    logger.error(f"图片处理失败: {img_e}")
+                    return f"图片文件 {os.path.basename(file_path)} 处理失败: {str(img_e)}"
+                
+            except ImportError:
+                logger.warning("OCR管理器不可用，使用基础文本处理")
+                return f"图片文件 {os.path.basename(file_path)} 的OCR识别功能暂不可用，请检查OCR相关依赖。"
+            except Exception as ocr_e:
+                logger.error(f"OCR识别失败: {ocr_e}")
+                return f"图片文件 {os.path.basename(file_path)} 的OCR识别失败: {str(ocr_e)}"
+                
+    except Exception as e:
+        logger.error(f"文件处理失败: {e}")
+        return f"文件 {os.path.basename(file_path)} 处理失败: {str(e)}"
+
+
+async def _prepare_vision_enabled_message(question: str, file_path: str, ocr_text: str, base_prompt: str, session_id: str) -> list:
+    """准备启用视觉大模型的消息内容"""
+    try:
+        # 读取文件并转换为base64
+        with open(file_path, "rb") as file_content:
+            file_data = file_content.read()
+            file_base64 = base64.b64encode(file_data).decode('utf-8')
+
+        # 获取MIME类型
+        file_ext = os.path.splitext(file_path)[1].lower()
+        mime_type = {
+            '.jpg': 'image/jpeg',
+            '.jpeg': 'image/jpeg',
+            '.png': 'image/png',
+            '.gif': 'image/gif',
+            '.bmp': 'image/bmp',
+            '.webp': 'image/webp'
+        }.get(file_ext, 'image/jpeg')
+
+        # 创建data URL
+        data_url = f"data:{mime_type};base64,{file_base64}"
+
+        # 保存base64数据到会话
+        session_store[session_id]["file_base64"] = file_base64
+        session_store[session_id]["file_type"] = "image"
+
+        # 构建消息内容
+        message_content = [
+            {
+                "type": "text",
+                "text": f"{base_prompt}\n\n⚠️ 重要指示：用户已上传了一个{file_ext.upper()}文件。\n\n**OCR识别结果**：\n{ocr_text[:1500]}{'...' if len(ocr_text) > 1500 else ''}\n\n**请结合OCR识别结果和图片内容进行分析**。你现在可以：\n1. 查看图片内容进行视觉分析\n2. 结合OCR识别的文本信息\n3. 基于财务报销规则进行详细审核\n\n用户问题：{question}"
+            },
+            {
+                "type": "image_url",
+                "image_url": {
+                    "url": data_url
+                }
+            }
+        ]
+
+        logger.info("已准备启用视觉大模型的消息内容（包含图片和OCR结果）")
+        return message_content
+
+    except Exception as e:
+        logger.error(f"准备视觉大模型消息失败: {e}")
+        return [{"type": "text", "text": f"{base_prompt}\n\n❌ 错误：处理文件时出错: {str(e)}"}]
+
+
+async def _prepare_text_only_message(question: str, ocr_text: str, base_prompt: str) -> str:
+    """准备仅文本模式的消息内容"""
+    try:
+        # 构建仅文本的消息，完全移除对recognize_document工具的引用
+        text_message = f"""{base_prompt}
+
+⚠️ 重要指示：用户已上传了一个文件，系统已主动进行OCR识别。
+
+**OCR识别结果**：
+{ocr_text[:1500]}{'...' if len(ocr_text) > 1500 else ''}
+
+**请仅基于以上OCR识别的文本信息进行分析**：
+- 不需要调用任何视觉识别工具
+- 直接基于提取的文本内容进行财务审核
+- 根据报销规则逐条验证
+
+用户问题：{question}
+
+**重要**：请直接基于OCR识别结果进行审核分析，不要调用recognize_document工具。"""
+
+        logger.info("已准备仅文本模式的消息内容（仅包含OCR结果，不调用视觉工具）")
+        return text_message
+
+    except Exception as e:
+        logger.error(f"准备文本消息失败: {e}")
+        return f"{base_prompt}\n\n❌ 错误：处理文件时出错: {str(e)}"
 
 
 async def _execute_tool(tool_name: str, tool_args: dict, session_id: str, mcp_client):
@@ -1334,6 +1677,8 @@ async def _execute_tool(tool_name: str, tool_args: dict, session_id: str, mcp_cl
 
             # Get OpenAI configuration from session
             session_data = session_store.get(session_id, {})
+            enable_vision_model = session_data.get("enable_vision_model", False)
+            
             if session_data:
                 # Try to get API key and base URL from environment variables
                 api_key = os.environ.get(f"OPENAI_API_KEY_{session_id}")
@@ -1346,32 +1691,48 @@ async def _execute_tool(tool_name: str, tool_args: dict, session_id: str, mcp_cl
                     tool_args["model"] = model
                     logger.info("已添加OpenAI配置参数到工具调用")
 
-            # Use base64 image data from session storage instead of file URLs
-            if "file_base64" in session_data:
-                file_base64 = session_data["file_base64"]
-                file_type = session_data.get("file_type", "image")
-                
-                # For PDF files, we need to handle them differently
-                if file_type == "pdf":
-                    # For PDF, we need to convert to image first or handle differently
-                    # For now, we'll skip PDF processing in OCR tools
-                    logger.info("PDF文件暂不支持OCR识别")
-                else:
-                    # Use base64 image data directly
-                    tool_args["image_data"] = file_base64
-                    logger.info("已使用base64图片数据")
+            # 只有在启用视觉大模型时才传递图像数据
+            if enable_vision_model:
+                # Use base64 image data from session storage instead of file URLs
+                if "file_base64" in session_data:
+                    file_base64 = session_data["file_base64"]
+                    file_type = session_data.get("file_type", "image")
                     
-                    # Remove image_url if it exists to avoid conflicts
-                    if "image_url" in tool_args:
-                        del tool_args["image_url"]
-                        logger.info("已移除image_url参数，使用image_data")
+                    # For PDF files, we need to handle them differently
+                    if file_type == "pdf":
+                        # For PDF, we need to convert to image first or handle differently
+                        # For now, we'll skip PDF processing in OCR tools
+                        logger.info("PDF文件暂不支持OCR识别")
+                    else:
+                        # Use base64 image data directly
+                        tool_args["image_data"] = file_base64
+                        logger.info("视觉大模型已启用，使用base64图片数据")
+                        
+                        # Remove image_url if it exists to avoid conflicts
+                        if "image_url" in tool_args:
+                            del tool_args["image_url"]
+                            logger.info("已移除image_url参数，使用image_data")
+            else:
+                # 视觉大模型未启用，不传递图像数据，移除所有图像相关参数
+                logger.info("视觉大模型未启用，不传递图像数据给MCP工具")
+                if "image_data" in tool_args:
+                    del tool_args["image_data"]
+                if "image_url" in tool_args:
+                    del tool_args["image_url"]
+                logger.info("已移除所有图像相关参数")
 
             # Ensure only document recognition tool supported parameters are passed
             valid_args = {}
+            # 优先使用image_data，如果存在则不使用image_url
             if "image_data" in tool_args:
                 valid_args["image_data"] = tool_args["image_data"]
-            if "image_url" in tool_args:
+                logger.info("使用image_data参数")
+            elif "image_url" in tool_args:
                 valid_args["image_url"] = tool_args["image_url"]
+                logger.info("使用image_url参数")
+            else:
+                logger.warning("未找到有效的图像源参数")
+            
             # Include user_text if provided
             if "user_text" in tool_args:
                 valid_args["user_text"] = tool_args["user_text"]
@@ -1623,6 +1984,13 @@ class AuditAgentApp:
                     value=env_config["model_input"]
                 )
                 
+                # 添加视觉大模型配置项
+                enable_vision_model = gr.Checkbox(
+                    label="启用视觉大模型",
+                    value=env_config["enable_vision_model"],
+                    info="勾选后，在Step 4中会上传图片给AI进行视觉分析；不勾选则只使用文本信息"
+                )
+                
                 test_connection_btn = gr.Button("测试连接", variant="primary")
                 
                 connection_status = gr.Textbox(
@@ -1633,7 +2001,7 @@ class AuditAgentApp:
         # Set up event handler for connection test
         test_connection_btn.click(
             fn=test_and_store_client,
-            inputs=[api_key_input, base_url_input, model_input, session_id],
+            inputs=[api_key_input, base_url_input, model_input, session_id, enable_vision_model],
             outputs=connection_status
         )
         
@@ -1758,13 +2126,6 @@ class AuditAgentApp:
             </ul>
         </div>
         """)
-        
-        # Set up event handler for connection test
-        test_connection_btn.click(
-            fn=test_and_store_client,
-            inputs=[api_key_input, base_url_input, model_input, session_id],
-            outputs=connection_status
-        )
     
     def setup_knowledge_base_tab(self, session_id):
         with gr.Row():
