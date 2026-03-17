@@ -190,6 +190,12 @@ pip install -r requirements.txt
 
 ### Usage Process
 
+Start the tool with the following command:
+
+```bash
+python app.py
+```
+
 #### Step 1: Settings
 1. Configure OpenAI API key
 2. Set API base URL

@@ -191,6 +191,12 @@ pip install -r requirements.txt
 
 ### 使用流程
 
+使用命令启动工具：
+
+```bash
+python app.py
+```
+
 #### Step 1: 设置
 1. 配置OpenAI API密钥
 2. 设置API基础URL
